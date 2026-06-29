@@ -1,0 +1,62 @@
+# Secrets / config
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.eggs/
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# uv
+# (uv.lock IS committed — reproducibility. Do not ignore it.)
+
+# Data — real data lives in MinIO / Postgres, not git
+data/
+!data/.gitkeep
+*.parquet
+*.duckdb
+*.duckdb.wal
+
+# pybaseball local cache
+.pybaseball/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+profiles.yml
+!dbt/profiles.example.yml
+
+# Dagster
+.dagster/
+tmp_dagster_home_*/
+
+# MLflow
+mlruns/
+mlartifacts/
+
+# R / renv
+r/renv/library/
+r/renv/local/
+r/renv/staging/
+.Rhistory
+.RData
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

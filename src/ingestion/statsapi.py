@@ -1,0 +1,90 @@
+"""Ingest schedules / game-level data from the official MLB Stats API.
+
+Compliance: ``statsapi.mlb.com`` data is MLB Advanced Media copyright — derived
+analysis only, no resale of the raw feed; attribute MLBAM; rate-limit + cache
+(handled by ``cached_get`` on the ``statsapi`` limiter). We use the official API
+directly (no scraping). The ``MLB-StatsAPI`` library (GPLv3) is an optional helper,
+used only as a runtime dependency for producing analysis — never bundled into a
+closed, redistributed product (see ``registry.md``).
+
+Run::
+
+    python -m src.ingestion.statsapi --season 2025
+    python -m src.ingestion.statsapi --start 2025-04-01 --end 2025-04-30
+"""
+
+from __future__ import annotations
+
+import pandas as pd
+import typer
+from loguru import logger
+
+from src.compliance.attributions import Source
+from src.ingestion._storage import bronze_key, write_parquet
+from src.ingestion._throttle import cached_get
+
+app = typer.Typer(add_completion=False, help="Ingest MLB Stats API schedules.")
+
+SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
+
+
+def _fetch_schedule(start: str, end: str, sport_id: int = 1) -> pd.DataFrame:
+    """Fetch the schedule for a date range and flatten games to one row each."""
+    payload = cached_get(
+        SCHEDULE_URL,
+        source="statsapi",
+        params={
+            "sportId": sport_id,
+            "startDate": start,
+            "endDate": end,
+            "gameTypes": "R,F,D,L,W",  # regular + postseason rounds
+        },
+    )
+    rows: list[dict] = []
+    for day in payload.get("dates", []):  # type: ignore[union-attr]
+        for g in day.get("games", []):
+            teams = g.get("teams", {})
+            rows.append(
+                {
+                    "game_pk": g.get("gamePk"),
+                    "game_date": day.get("date"),
+                    "game_type": g.get("gameType"),
+                    "season": g.get("season"),
+                    "status": g.get("status", {}).get("detailedState"),
+                    "home_team_id": teams.get("home", {}).get("team", {}).get("id"),
+                    "home_team": teams.get("home", {}).get("team", {}).get("name"),
+                    "home_score": teams.get("home", {}).get("score"),
+                    "away_team_id": teams.get("away", {}).get("team", {}).get("id"),
+                    "away_team": teams.get("away", {}).get("team", {}).get("name"),
+                    "away_score": teams.get("away", {}).get("score"),
+                    "venue": g.get("venue", {}).get("name"),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def ingest(start: str, end: str) -> str:
+    """Pull the schedule for [start, end] and land it as Parquet in bronze."""
+    logger.info("StatsAPI: schedule {} -> {}", start, end)
+    df = _fetch_schedule(start, end)
+    season = start[:4]
+    key = bronze_key("statsapi", f"season={season}", f"schedule_{start}_{end}.parquet")
+    return write_parquet(df, key, sources=[Source.MLB_STATS_API])
+
+
+@app.command()
+def main(
+    season: int = typer.Option(None, "--season", help="Full-season shortcut."),
+    start: str = typer.Option(None, "--start", help="YYYY-MM-DD inclusive."),
+    end: str = typer.Option(None, "--end", help="YYYY-MM-DD inclusive."),
+) -> None:
+    if season:
+        start, end = f"{season}-03-01", f"{season}-11-30"
+    elif not (start and end):
+        raise typer.BadParameter("Provide --season OR both --start and --end.")
+    key = ingest(start, end)
+    logger.success("StatsAPI ingest complete -> {}", key)
+
+
+if __name__ == "__main__":
+    app()

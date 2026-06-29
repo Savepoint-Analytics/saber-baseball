@@ -1,0 +1,29 @@
+# Copy to ~/.dbt/profiles.yml (or set DBT_PROFILES_DIR) and fill from your .env.
+# Two targets: `duckdb` for lake transforms over MinIO Parquet (bronze/silver),
+# `postgres` for the curated serving warehouse (silver/gold). See CLAUDE.md §4.
+saber_baseball:
+  target: duckdb
+  outputs:
+    duckdb:
+      type: duckdb
+      path: "../data/saber.duckdb"
+      extensions:
+        - httpfs
+        - parquet
+      # For MinIO-backed Parquet, set S3 settings so httpfs can read s3://saber-bronze.
+      settings:
+        s3_endpoint: "localhost:9000"
+        s3_use_ssl: false
+        s3_url_style: "path"
+        s3_access_key_id: "{{ env_var('MINIO_ROOT_USER', 'saber') }}"
+        s3_secret_access_key: "{{ env_var('MINIO_ROOT_PASSWORD', 'change-me') }}"
+
+    postgres:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | int }}"
+      user: "{{ env_var('POSTGRES_USER', 'saber') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'change-me') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'saber_baseball') }}"
+      schema: public
+      threads: 4

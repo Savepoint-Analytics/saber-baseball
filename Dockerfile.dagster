@@ -1,0 +1,19 @@
+# Minimal image to run Dagster + the ingestion code on Savepoint-Lab.
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# uv for fast, reproducible installs.
+RUN pip install --no-cache-dir uv
+
+# Install deps first (better layer caching). orchestration + warehouse extras.
+COPY pyproject.toml README.md ./
+RUN uv pip install --system ".[orchestration,warehouse]"
+
+COPY . .
+
+EXPOSE 3000
+CMD ["dagster", "dev", "-h", "0.0.0.0", "-p", "3000", "-m", "orchestration.definitions"]

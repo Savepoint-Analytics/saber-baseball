@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: sv_games
+    description: "Cleaned, completed game-level facts (spine for outcome modeling)."
+    columns:
+      - name: game_pk
+        description: "Unique MLB game id."
+        tests: [unique, not_null]
+      - name: game_date
+        tests: [not_null]
+      - name: home_win
+        description: "1 if home team won, 0 otherwise; null if not final."
+        tests:
+          - accepted_values:
+              values: [0, 1]
+              config:
+                where: "home_win is not null"
