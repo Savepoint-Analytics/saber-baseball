@@ -11,9 +11,12 @@ Run::
 
     python -m src.ingestion.statsapi --season 2025
     python -m src.ingestion.statsapi --start 2025-04-01 --end 2025-04-30
+    python -m src.ingestion.statsapi --start-season 2015   # backfill → current year
 """
 
 from __future__ import annotations
+
+from datetime import date
 
 import pandas as pd
 import typer
@@ -26,6 +29,10 @@ from src.ingestion._throttle import cached_get
 app = typer.Typer(add_completion=False, help="Ingest MLB Stats API schedules.")
 
 SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
+
+# Season bounds, wide enough for international openers and a November World Series.
+_SEASON_START = "{year}-03-01"
+_SEASON_END = "{year}-11-30"
 
 
 def _fetch_schedule(start: str, end: str, sport_id: int = 1) -> pd.DataFrame:
@@ -63,6 +70,15 @@ def _fetch_schedule(start: str, end: str, sport_id: int = 1) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def season_window(season: int) -> tuple[str, str]:
+    """Date window covering a full season: international openers → World Series.
+
+    March 1 is early enough for the Tokyo/Seoul openers (2019, 2024 and 2025 all
+    started March 18-20) and November 30 is late enough for any World Series.
+    """
+    return _SEASON_START.format(year=season), _SEASON_END.format(year=season)
+
+
 def ingest(start: str, end: str) -> str:
     """Pull the schedule for [start, end] and land it as Parquet in bronze."""
     logger.info("StatsAPI: schedule {} -> {}", start, end)
@@ -72,16 +88,52 @@ def ingest(start: str, end: str) -> str:
     return write_parquet(df, key, sources=[Source.MLB_STATS_API])
 
 
+def backfill(start_season: int, end_season: int) -> list[str]:
+    """Ingest one schedule partition per season across [start_season, end_season].
+
+    This is what makes a multi-season history reproducible from a clean checkout
+    (``CLAUDE.md`` golden rule 1) rather than a property of one machine's data dir.
+    Seasons are pulled independently so a transient failure on one does not discard
+    the rest; failures are collected and raised once the loop finishes.
+    """
+    if end_season < start_season:
+        raise ValueError(f"end_season {end_season} precedes start_season {start_season}")
+
+    written: list[str] = []
+    failed: list[int] = []
+    for season in range(start_season, end_season + 1):
+        try:
+            written.append(ingest(*season_window(season)))
+        except Exception as exc:  # keep going; a bad season shouldn't sink the backfill
+            logger.error("StatsAPI: season {} failed: {}", season, exc)
+            failed.append(season)
+
+    logger.info("StatsAPI backfill: {} season(s) written, {} failed", len(written), len(failed))
+    if failed:
+        raise RuntimeError(f"StatsAPI backfill failed for season(s): {failed}")
+    return written
+
+
 @app.command()
 def main(
     season: int = typer.Option(None, "--season", help="Full-season shortcut."),
+    start_season: int = typer.Option(
+        None, "--start-season", help="First season of a multi-season backfill."
+    ),
+    end_season: int = typer.Option(
+        None, "--end-season", help="Last season of a backfill (default: current year)."
+    ),
     start: str = typer.Option(None, "--start", help="YYYY-MM-DD inclusive."),
     end: str = typer.Option(None, "--end", help="YYYY-MM-DD inclusive."),
 ) -> None:
+    if start_season:
+        keys = backfill(start_season, end_season or date.today().year)
+        logger.success("StatsAPI backfill complete: {} season(s)", len(keys))
+        return
     if season:
-        start, end = f"{season}-03-01", f"{season}-11-30"
+        start, end = season_window(season)
     elif not (start and end):
-        raise typer.BadParameter("Provide --season OR both --start and --end.")
+        raise typer.BadParameter("Provide --season, --start-season, OR both --start and --end.")
     key = ingest(start, end)
     logger.success("StatsAPI ingest complete -> {}", key)
 

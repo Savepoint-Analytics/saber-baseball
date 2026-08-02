@@ -134,6 +134,15 @@ python -m src.ingestion.chadwick                     # ID crosswalk
 python -m src.ingestion.statcast --start 2025-04-01 --end 2025-04-07
 python -m src.ingestion.retrosheet --season 2024
 python -m src.ingestion.statsapi --season 2025
+python -m src.ingestion.statsapi --start-season 2015                 # multi-season backfill
+```
+
+To rebuild the full game history a model trains on (Statcast era → current season):
+
+```bash
+make backfill                            # 2015..current year, one partition per season
+make backfill BACKFILL_START=2021        # or override the range
+make dbt-duckdb                          # bronze → silver → gold
 ```
 
 ## Roadmap

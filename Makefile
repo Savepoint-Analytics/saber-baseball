@@ -5,9 +5,14 @@
 SHELL := /bin/bash
 SEASON ?= 2025
 
+# Backfill range. 2015 is the Statcast-era boundary (PROJECT_CONTEXT §4); the end
+# defaults to the current year so the target does not go stale.
+BACKFILL_START ?= 2015
+BACKFILL_END ?= $(shell date +%Y)
+
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
-        ingest-statcast ingest-retrosheet ingest-statsapi dbt dbt-duckdb test lint \
-        fmt typecheck serve clean
+        ingest-statcast ingest-retrosheet ingest-statsapi backfill dbt dbt-duckdb \
+        test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -41,6 +46,10 @@ ingest-retrosheet: ## Pull Retrosheet events for $(SEASON)
 
 ingest-statsapi: ## Pull MLB Stats API schedule for $(SEASON)
 	uv run python -m src.ingestion.statsapi --season $(SEASON)
+
+backfill: ## Backfill schedules for BACKFILL_START..BACKFILL_END (default 2015..current)
+	uv run python -m src.ingestion.statsapi \
+		--start-season $(BACKFILL_START) --end-season $(BACKFILL_END)
 
 dbt: ## Build dbt models against Postgres
 	cd dbt && uv run dbt build --target postgres
