@@ -13,6 +13,7 @@ models:
         description: "1 if home team won, 0 otherwise; null if not final."
         tests:
           - accepted_values:
-              values: [0, 1]
+              arguments:
+                values: [0, 1]
               config:
                 where: "home_win is not null"

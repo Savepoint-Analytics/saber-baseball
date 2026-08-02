@@ -1,16 +1,44 @@
 -- Silver: cleaned, conformed game-level table from the StatsAPI schedule.
 -- One row per completed game with typed scores and a derived home-win flag —
 -- the spine for Phase-3 outcome modeling.
+--
+-- Two quirks of the StatsAPI schedule feed are handled here (both verified against
+-- the 2025 pull: 2,511 raw rows → 2,481 games):
+--
+--   1. 'Completed Early' games are real, official results (rain-shortened) with
+--      scores populated — 5 of them in 2025. Only 'Postponed' rows are score-less
+--      and must be dropped, so filter on the completed statuses rather than on
+--      'Final' alone.
+--   2. A game_pk can appear under two dates: once on the original date (postponed
+--      or suspended) and again on the date it actually finished. 34 game_pks in
+--      2025, of which 4 are Final-on-both-dates (suspended games resumed the next
+--      day), which the `unique` test on game_pk catches. We keep the row from the
+--      date the game reached its final score. That de-duplicates the spine and
+--      keeps the backtest causal — a result is never dated earlier than the day it
+--      became known, so time-ordered features (Elo, rest days) can't peek ahead.
 {{ config(materialized='table') }}
 
 with src as (
-    select * from {{ ref('br_statsapi_schedule') }}
+    select *
+    from {{ ref('br_statsapi_schedule') }}
+    where status in ('Final', 'Completed Early')
+),
+
+-- Rank each game_pk's rows so we can keep only the completion-date row (see #2).
+ranked as (
+    select
+        src.*,
+        row_number() over (
+            partition by game_pk
+            order by cast(game_date as date) desc
+        ) as _completion_rank
+    from src
 )
 
 select
     cast(game_pk as bigint)                      as game_pk,
     cast(game_date as date)                      as game_date,
-    season,
+    cast(season as integer)                      as season,
     game_type,
     status,
     home_team_id,
@@ -24,5 +52,5 @@ select
         when home_score > away_score then 1 else 0
     end                                          as home_win,
     venue
-from src
-where status = 'Final'
+from ranked
+where _completion_rank = 1
