@@ -66,6 +66,7 @@ def _candidate_urls() -> list[str]:
             urls.append(url)
     return urls
 
+
 DEFAULT_TABLES = ["Teams", "People", "Batting", "Pitching", "Fielding"]
 
 # Logical table -> CSV basename. Files live under core/ or contrib/ in the archive;
@@ -126,12 +127,16 @@ def _read_table(zf: zipfile.ZipFile, table: str) -> pd.DataFrame:
     fname = _TABLE_FILES.get(table)
     if fname is None:
         raise ValueError(f"Unknown Lahman table: {table!r}. Known: {sorted(_TABLE_FILES)}")
-    matches = [n for n in zf.namelist() if n.endswith(f"/core/{fname}") or n.endswith(f"/contrib/{fname}")]
+    matches = [
+        n for n in zf.namelist() if n.endswith(f"/core/{fname}") or n.endswith(f"/contrib/{fname}")
+    ]
     if not matches:
         # Fall back to any path ending in the filename (layout drift safety net).
         matches = [n for n in zf.namelist() if n.endswith(f"/{fname}")]
     if not matches:
-        raise FileNotFoundError(f"{fname} not found in baseballdatabank archive for table {table!r}")
+        raise FileNotFoundError(
+            f"{fname} not found in baseballdatabank archive for table {table!r}"
+        )
     with zf.open(matches[0]) as fh:
         return pd.read_csv(fh)
 
