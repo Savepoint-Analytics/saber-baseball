@@ -92,7 +92,10 @@ ignore = [
 known-first-party = ["src"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12 is the dev + CI interpreter. requires-python stays >=3.11 (that is a support
+# floor, not the checked target); pinning mypy to 3.11 here made it refuse to parse
+# numpy's PEP 695 stubs on a 3.12 venv, which silently disabled the type gate locally.
+python_version = "3.12"
 warn_unused_ignores = true
 warn_redundant_casts = true
 disallow_untyped_defs = false
