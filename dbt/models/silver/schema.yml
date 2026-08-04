@@ -9,6 +9,13 @@ models:
         tests: [unique, not_null]
       - name: game_date
         tests: [not_null]
+      - name: season_phase
+        description: "'regular' or 'postseason'. Baselines must be fit on 'regular' only."
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["regular", "postseason"]
       - name: home_win
         description: "1 if home team won, 0 otherwise; null if not final."
         tests:

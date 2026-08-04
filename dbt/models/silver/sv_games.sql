@@ -40,6 +40,14 @@ select
     cast(game_date as date)                      as game_date,
     cast(season as integer)                      as season,
     game_type,
+    -- Postseason must never be pooled with regular season: it is a biased sample
+    -- (only good teams appear, and only in short series), so it would distort any
+    -- team-strength or Pythagorean estimate fit on it. `game_type` keeps the round
+    -- detail — F=wild card, D=division, L=championship, W=World Series — while
+    -- `season_phase` is the coarse split most consumers actually filter on.
+    -- Note game-163 tiebreakers are typed 'R' by the API and so count as regular
+    -- season, which is correct (2018 has 2,431 regular-season games for this reason).
+    case when game_type = 'R' then 'regular' else 'postseason' end as season_phase,
     status,
     home_team_id,
     home_team,
