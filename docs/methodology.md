@@ -20,9 +20,20 @@ clean checkout (`PROJECT_CONTEXT.md` §5). Concretely:
 
 ```
 sources → src/ingestion (rate-limited, cached) → bronze Parquet
-        → dbt (duckdb) bronze views → silver (Postgres) → gold marts
+        → dbt (duckdb) bronze views → silver → gold marts, all in DuckDB
+        → src/warehouse/load_postgres → silver + gold copied into Postgres
         → src/features, src/models, src/simulation → MLflow + serving
 ```
+
+**Why transforms run in DuckDB and not against Postgres directly.** The bronze
+models are `read_parquet()` views, and `read_parquet` is a DuckDB function that
+Postgres does not have, so `dbt build --target postgres` fails to compile the bronze
+layer and skips everything downstream. DuckDB therefore owns every transform and
+test; `src/warehouse/load_postgres.py` then copies *only the modeled silver and gold
+results* into Postgres for serving, via the DuckDB `postgres` extension. That is the
+"push only modeled results into Postgres" rule from `CLAUDE.md` §4 — raw pitch-level
+data never enters the warehouse, which is a licensing property as much as a
+performance one.
 
 ## Modeling sequence (PROJECT_CONTEXT §3)
 

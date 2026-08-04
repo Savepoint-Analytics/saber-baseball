@@ -119,7 +119,7 @@ docker compose up -d            # postgres, minio, dagster
 make ingest SEASON=2025
 
 # 4. Transform + test
-make dbt
+make warehouse                  # dbt build in DuckDB, then publish results to Postgres
 make test
 
 # 5. Explore

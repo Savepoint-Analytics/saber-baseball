@@ -12,7 +12,7 @@ BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
         ingest-statcast ingest-retrosheet ingest-statsapi backfill dbt dbt-duckdb \
-        test lint fmt typecheck serve clean
+        publish warehouse test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -56,6 +56,11 @@ dbt: ## Build dbt models against Postgres
 
 dbt-duckdb: ## Build dbt bronze/silver models against DuckDB
 	cd dbt && uv run dbt build --target duckdb
+
+publish: ## Copy modeled silver/gold tables from DuckDB into the Postgres warehouse
+	uv run python -m src.warehouse.load_postgres
+
+warehouse: dbt-duckdb publish ## Transform in DuckDB, then publish results to Postgres
 
 test: ## Run pytest
 	uv run pytest

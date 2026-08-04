@@ -59,6 +59,19 @@ class Settings(BaseSettings):
         )
 
     @property
+    def postgres_dsn(self) -> str:
+        """Plain libpq DSN for the warehouse.
+
+        Distinct from ``postgres_url``: the ``+psycopg`` dialect suffix is a
+        SQLAlchemy convention that libpq clients reject, and DuckDB's ``postgres``
+        extension speaks libpq. Used by ``src.warehouse.load_postgres``.
+        """
+        return (
+            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
     def bronze_root(self) -> str:
         """Root URI for the bronze (raw) landing zone.
 
