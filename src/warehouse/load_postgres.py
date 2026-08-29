@@ -15,6 +15,11 @@ So the split is:
     into Postgres, which is exactly the "push only modeled results into Postgres"
     rule from ``CLAUDE.md`` §4. Raw pitch-level data never lands in Postgres.
 
+Everything is published into the vertical's own Postgres schema
+(``POSTGRES_SCHEMA``, default ``baseball``). Savepoint-Lab hosts one ``sports``
+database for every vertical, so a schema per vertical is what keeps baseball's
+marts from colliding with tennis's.
+
 The copy uses DuckDB's ``postgres`` extension (ATTACH ... TYPE POSTGRES) so the
 data never round-trips through Python memory.
 
@@ -39,6 +44,13 @@ app = typer.Typer(add_completion=False, help="Publish modeled tables to Postgres
 # Only curated layers are published. Bronze stays in the lake: it is raw
 # third-party data under source licenses (see public-data-sources.md), it is wide
 # and schema-drifting, and Postgres is for serving derived analysis.
+#
+# Keys are the DuckDB layer (dbt materializes them as `main_silver` / `main_gold`);
+# values are the tables to copy. In Postgres every table lands in ONE schema — the
+# vertical's own (`settings.postgres_schema`, e.g. `baseball`) — because
+# Savepoint-Lab runs a single `sports` database shared with the other verticals.
+# The layer survives in the table name's `sv_` / `gd_` prefix, so nothing is lost by
+# flattening, and `baseball.sv_games` cannot collide with `tennis.silver_matches`.
 PUBLISHED: dict[str, tuple[str, ...]] = {
     "silver": ("sv_games",),
     "gold": ("gd_team_season_record",),
@@ -66,16 +78,18 @@ def publish(dry_run: bool = False) -> dict[str, int]:
     con.execute(f"ATTACH '{settings.postgres_dsn}' AS pg (TYPE POSTGRES)")
     logger.info("attached postgres at {}:{}", settings.postgres_host, settings.postgres_port)
 
+    warehouse_schema = settings.postgres_schema
+    if not dry_run:
+        con.execute(f"CREATE SCHEMA IF NOT EXISTS pg.{warehouse_schema}")
+
     counts: dict[str, int] = {}
-    for schema, tables in PUBLISHED.items():
-        if not dry_run:
-            con.execute(f"CREATE SCHEMA IF NOT EXISTS pg.{schema}")
+    for layer, tables in PUBLISHED.items():
         for table in tables:
-            source = f"main_{schema}.{table}"
-            target = f"pg.{schema}.{table}"
+            source = f"main_{layer}.{table}"
+            target = f"pg.{warehouse_schema}.{table}"
             row = con.sql(f"select count(*) from {source}").fetchone()
             rows = int(row[0]) if row else 0
-            counts[f"{schema}.{table}"] = rows
+            counts[f"{warehouse_schema}.{table}"] = rows
             if dry_run:
                 logger.info("[dry-run] would publish {} rows: {} -> {}", rows, source, target)
                 continue

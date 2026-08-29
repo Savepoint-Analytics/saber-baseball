@@ -21,7 +21,7 @@ clean checkout (`PROJECT_CONTEXT.md` §5). Concretely:
 ```
 sources → src/ingestion (rate-limited, cached) → bronze Parquet
         → dbt (duckdb) bronze views → silver → gold marts, all in DuckDB
-        → src/warehouse/load_postgres → silver + gold copied into Postgres
+        → src/warehouse/load_postgres → silver + gold copied into Postgres (baseball.*)
         → src/features, src/models, src/simulation → MLflow + serving
 ```
 
@@ -34,6 +34,13 @@ results* into Postgres for serving, via the DuckDB `postgres` extension. That is
 "push only modeled results into Postgres" rule from `CLAUDE.md` §4 — raw pitch-level
 data never enters the warehouse, which is a licensing property as much as a
 performance one.
+
+**Why the marts land in a `baseball` schema.** Savepoint-Lab runs one Postgres
+database (`sports`) shared by every vertical, so each vertical owns a schema inside
+it — tennis publishes `tennis.*`, baseball publishes `baseball.*` (set via
+`POSTGRES_SCHEMA`). Publishing to bare `silver`/`gold` schemas would collide with the
+next vertical that did the same. The medallion layer is not lost by flattening
+because it already lives in the table-name prefix (`sv_`, `gd_`).
 
 ## Modeling sequence (PROJECT_CONTEXT §3)
 

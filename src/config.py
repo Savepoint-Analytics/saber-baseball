@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     postgres_user: str = Field(default="saber", alias="POSTGRES_USER")
     postgres_password: str = Field(default="change-me", alias="POSTGRES_PASSWORD")
     postgres_db: str = Field(default="saber_baseball", alias="POSTGRES_DB")
+    # Savepoint-Lab runs ONE Postgres database (`sports`) shared by every vertical,
+    # so each vertical owns a schema rather than a database — tennis publishes into
+    # `tennis`, baseball into `baseball`. Publishing to bare `silver`/`gold` would
+    # collide the moment a second vertical did the same. `POSTGRES_SCHEMA` is the
+    # cross-vertical name; `POSTGRES_SC` is accepted because deployed .env files
+    # carry that truncated spelling, and silently reading nothing is exactly the
+    # failure this field exists to prevent.
+    postgres_schema: str = Field(
+        default="baseball",
+        validation_alias=AliasChoices("POSTGRES_SCHEMA", "POSTGRES_SC"),
+    )
 
     # ---- MinIO / S3 ---------------------------------------------------------
     minio_endpoint: str = Field(default="http://localhost:9000", alias="MINIO_ENDPOINT")
