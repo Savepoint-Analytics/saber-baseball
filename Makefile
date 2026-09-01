@@ -74,11 +74,13 @@ publish: ## Copy modeled silver/gold tables from DuckDB into the Postgres wareho
 
 warehouse: dbt-duckdb publish ## Transform in DuckDB, then publish results to Postgres
 
+# Prefect reads PREFECT_API_URL from the process environment, not from our settings
+# object, so these need .env exported the same way the dbt targets do.
 flows: ## Serve the scheduled Prefect deployment (long-running; Ctrl-C to stop)
-	uv run python -m orchestration.flows
+	$(ENVLOAD) && uv run python -m orchestration.flows
 
 pipeline: ## Run the full ingest -> dbt -> publish chain once, right now
-	uv run python -c "from orchestration.flows import daily_pipeline; daily_pipeline()"
+	$(ENVLOAD) && uv run python -c "from orchestration.flows import daily_pipeline; daily_pipeline()"
 
 test: ## Run pytest
 	uv run pytest

@@ -19,6 +19,11 @@ def test_dbt_dir_points_at_a_real_dbt_project():
     assert (flows.DBT_DIR / "dbt_project.yml").is_file()
 
 
+def test_flow_name_is_namespaced_for_the_shared_lab_server():
+    """One Prefect server hosts every vertical; names are a global namespace."""
+    assert flows.daily_pipeline.name.startswith("baseball-")
+
+
 def test_daily_pipeline_exposes_the_documented_parameters():
     """The Makefile `pipeline` target and Compose rely on these defaults."""
     params = flows.daily_pipeline.parameters.properties
