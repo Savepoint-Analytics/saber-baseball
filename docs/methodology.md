@@ -77,6 +77,29 @@ Coverage as of 2026-08-31: 8,184,213 pitches over 27,752 games, 2015-2026, and
 4. **Counterfactual simulation.** Bayesian partial-pooled player rates (PyMC/bambi);
    perturb an input skill and re-simulate to surface improvement levers.
 
+## Baseline results (measured 2026-08-31)
+
+Walk-forward over 2017-2026 (refit on all prior seasons for each held-out season;
+regular season only; the 2020 and 2021 folds are excluded from the mean because the
+60-game season distorts both). Produced by `python -m src.models.backtest`.
+
+| Model | Log-loss | Brier | Accuracy | ECE |
+|-------|----------|-------|----------|-----|
+| **Elo** | **0.6788** | 0.2429 | 0.5694 | 0.0146 |
+| Pythagorean (prior season) | 0.6821 | 0.2445 | 0.5634 | 0.0171 |
+| Log5 (prior-season W-L) | 0.6836 | 0.2452 | 0.5616 | 0.0191 |
+| Home-field constant | 0.6914 | 0.2491 | 0.5303 | 0.0079 |
+
+**Elo at 0.6788 is the bar** the gradient-boosted and Bayesian models must beat.
+For scale: 0.6931 is a coin flip, so every baseline sits close to it — single MLB
+games are genuinely near-random, and honest gains here are small.
+
+Two cautions when reading that table. Home-field has the *best* ECE purely because a
+model that always predicts the base rate is trivially calibrated; calibration is a
+necessary check, never a ranking metric on its own. And Pythagorean beats Log5
+because run differential is the less luck-contaminated measure of the same strength
+(year-over-year r = 0.62 vs 0.57 on 2015-2026).
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).
