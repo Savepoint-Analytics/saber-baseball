@@ -35,11 +35,19 @@ must be evaluated separately. Savepoint's commercial posture is:
 
 ### Lahman Baseball Database — season-level history
 - **Provides:** Seasonal batting/pitching/fielding, teams, standings back to 1871.
-- **Access:** Maintained as the Chadwick Bureau **baseballdatabank** repo (CSV under
-  `core/` + `contrib/`). Our `src/ingestion/lahman.py` downloads the archive directly,
-  resolving the repo's current default branch via the GitHub API. *Note:* do NOT rely
-  on `pybaseball.lahman` here — pybaseball 2.2.7 hardcodes the stale `master.zip` URL,
-  which now 404s and raises `BadZipFile` (pybaseball issue #391).
+- **Access:** Published by **SABR** at <https://sabr.org/lahman-database/>, which
+  links Box-hosted SQL / Access / comma-delimited downloads. Version 2025 (released
+  2026-01-02) covers 1871-2025 and adds Negro Leagues statistics licensed from
+  Seamheads. `src/ingestion/lahman.py` reads the SABR page, follows the
+  comma-delimited link, and indexes the shared folder by filename at run time,
+  because the Box file ids change with every annual release.
+  *Note (2026-08-31):* the Chadwick Bureau **baseballdatabank** GitHub repo this
+  previously used **no longer exists** — the repo 404s, so every archive URL
+  (`main`, `master`, API-resolved default branch) fails. The only surviving GitHub
+  mirror (`xorq-labs/baseballdatabank`) stops at 2021. Also do NOT rely on
+  `pybaseball.lahman` — it hardcodes the same dead `master.zip` URL (issue #391).
+- **Known gap:** `Salaries` ends at **2016** upstream; it is not maintained. Any
+  payroll/salary-efficiency work needs another source.
 - **License:** **Creative Commons Attribution-ShareAlike 3.0 (CC BY-SA 3.0).**
 - **Commercial:** ✅ Allowed with attribution **and ShareAlike**.
 - **ShareAlike caveat:** if we distribute a *derived database* built on Lahman, that

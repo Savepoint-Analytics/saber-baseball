@@ -27,7 +27,7 @@
 |------|------|---------|------|
 | [toddrob99/MLB-StatsAPI](https://github.com/toddrob99/MLB-StatsAPI) | Python | **GPLv3** | Modern, maintained wrapper for the official MLB Stats API (`statsapi.mlb.com`) — the correct replacement for `mlbgame` (live scores, schedules, boxscores, standings). |
 | Official **MLB Stats API** (`https://statsapi.mlb.com/api/`) | HTTP/JSON | MLBAM copyright (see data sources) | Direct, no-scrape access to schedules, live game state, rosters. Preferred for game-level + live data. |
-| [Lahman database](https://sabr.org/lahman-database/) | CSV/SQL | **CC BY-SA 3.0** | Season-level historical stats back to 1871. |
+| [Lahman database](https://sabr.org/lahman-database/) | CSV/SQL | **CC BY-SA 3.0** | Season-level historical stats 1871-2025, published by SABR (the Chadwick GitHub repo is gone — see `public-data-sources.md`). |
 | [Retrosheet](https://www.retrosheet.org/) | event files | Free w/ required notice | Play-by-play event data → run expectancy, WPA. |
 | [Chadwick Bureau register](https://github.com/chadwickbureau/register) | CSV | Open | Player ID crosswalk (MLBAM ↔ Retrosheet ↔ BBRef ↔ FanGraphs). pybaseball uses it. |
 | [baseball.computer](https://baseball.computer/) | DuckDB | Open (built on Retrosheet) | Pre-modeled historical analytical DB queryable via DuckDB. |

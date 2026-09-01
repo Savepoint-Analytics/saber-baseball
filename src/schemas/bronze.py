@@ -53,14 +53,19 @@ STATCAST_SCHEMA = DataFrameSchema(
 )
 
 # --- Lahman Teams (season-level) --------------------------------------------
+# W/L/R/RA use pandas' *nullable* Int64, not numpy int64. SABR's Lahman release
+# includes Negro Leagues seasons licensed from Seamheads where full statistics do not
+# survive — the 1932 Negro Southern League Cole's American Giants have a games/wins
+# record but no run totals. numpy int64 cannot represent that gap, so coercion fails
+# outright and a plain float column would quietly turn every run total into a float.
 LAHMAN_TEAMS_SCHEMA = DataFrameSchema(
     {
         "yearID": Column(pa.Int, nullable=False, coerce=True),
         "teamID": Column(pa.String, nullable=False),
-        "W": Column(pa.Int, pa.Check.ge(0), nullable=True, coerce=True),
-        "L": Column(pa.Int, pa.Check.ge(0), nullable=True, coerce=True),
-        "R": Column(pa.Int, pa.Check.ge(0), nullable=True, coerce=True),
-        "RA": Column(pa.Int, pa.Check.ge(0), nullable=True, coerce=True),
+        "W": Column("Int64", pa.Check.ge(0), nullable=True, coerce=True),
+        "L": Column("Int64", pa.Check.ge(0), nullable=True, coerce=True),
+        "R": Column("Int64", pa.Check.ge(0), nullable=True, coerce=True),
+        "RA": Column("Int64", pa.Check.ge(0), nullable=True, coerce=True),
     },
     strict=False,
     coerce=True,
