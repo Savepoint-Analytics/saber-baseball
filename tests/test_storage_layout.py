@@ -54,3 +54,24 @@ def test_object_key_without_prefix_has_no_leading_slash(monkeypatch):
     monkeypatch.setattr(sync_minio.settings, "minio_prefix", "")
     root = Path("/data/bronze")
     assert sync_minio.object_key(root / "lahman/x.parquet", root) == "lahman/x.parquet"
+
+
+def test_bronze_duckdb_configures_s3_only_for_minio(monkeypatch):
+    """A local-backend connection must not need httpfs; a MinIO one must load it."""
+    from src.ingestion import _storage
+
+    monkeypatch.setattr(_storage.settings, "storage_backend", "local")
+    con = _storage.bronze_duckdb()
+    loaded = {
+        r[0]
+        for r in con.sql("select extension_name from duckdb_extensions() where loaded").fetchall()
+    }
+    assert "httpfs" not in loaded
+
+    monkeypatch.setattr(_storage.settings, "storage_backend", "minio")
+    con = _storage.bronze_duckdb()
+    loaded = {
+        r[0]
+        for r in con.sql("select extension_name from duckdb_extensions() where loaded").fetchall()
+    }
+    assert "httpfs" in loaded

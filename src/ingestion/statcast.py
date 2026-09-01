@@ -18,14 +18,13 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import duckdb
 import pandas as pd
 import typer
 from loguru import logger
 
 from src.compliance.attributions import Source
 from src.config import settings
-from src.ingestion._storage import bronze_key, write_parquet
+from src.ingestion._storage import bronze_duckdb, bronze_key, write_parquet
 from src.ingestion._throttle import (
     enable_pybaseball_cache,
     get_limiter,
@@ -93,15 +92,19 @@ def game_dates(start_season: int, end_season: int) -> list[date]:
     does not require the warehouse to have been built first.
     """
     glob = f"{settings.bronze_root}/statsapi/**/*.parquet"
-    rows = duckdb.sql(
-        f"""
+    rows = (
+        bronze_duckdb()
+        .sql(
+            f"""
         select distinct cast(game_date as date) as d
         from read_parquet('{glob}', union_by_name=true)
         where status in ('Final', 'Completed Early')
           and cast(season as integer) between {start_season} and {end_season}
         order by d
         """
-    ).fetchall()
+        )
+        .fetchall()
+    )
     return [r[0] for r in rows]
 
 

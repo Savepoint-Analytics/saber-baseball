@@ -11,7 +11,9 @@ the required notice always travels with the raw landing zone.
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
+import duckdb
 import pandas as pd
 from loguru import logger
 
@@ -56,3 +58,33 @@ def _write_notice_s3(key: str, sources: list[Source], storage_options: dict) -> 
     notice_key = key.rsplit("/", 1)[0] + "/NOTICE.txt"
     with fs.open(notice_key, "w") as fh:
         fh.write(attribution_block(sources) + "\n")
+
+
+def bronze_duckdb() -> duckdb.DuckDBPyConnection:
+    """A DuckDB connection able to read the bronze layer on the current backend.
+
+    Reading bronze is not simply ``read_parquet`` once the backend is MinIO: DuckDB
+    needs httpfs loaded and an S3 secret, or the same query that works locally comes
+    back as an opaque 403. Anything that reads bronze should go through here rather
+    than calling ``duckdb.sql`` directly, so switching SABER_STORAGE_BACKEND stays a
+    one-line change instead of breaking callers one at a time.
+    """
+    con = duckdb.connect()
+    if settings.storage_backend != "minio":
+        return con
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute(
+        """
+        CREATE OR REPLACE SECRET bronze_s3 (
+            TYPE S3, KEY_ID $key, SECRET $secret,
+            ENDPOINT $endpoint, URL_STYLE 'path', USE_SSL $use_ssl
+        )
+        """,
+        {
+            "key": settings.minio_access_key,
+            "secret": settings.minio_secret_key,
+            "endpoint": urlparse(settings.minio_endpoint).netloc,
+            "use_ssl": settings.minio_endpoint.startswith("https"),
+        },
+    )
+    return con
