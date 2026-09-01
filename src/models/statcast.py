@@ -47,19 +47,36 @@ _DIFF_COLUMNS = (
 )
 
 
-def _require_form_columns(games: pd.DataFrame) -> None:
+def _require_form_columns(games: pd.DataFrame, columns: tuple[str, ...] = _DIFF_COLUMNS) -> None:
     """Fail with the fix in the message, not a bare KeyError three frames down."""
     missing = [
         f"{side}_{c}"
-        for c in _DIFF_COLUMNS
+        for c in columns
         for side in ("home", "away")
         if f"{side}_{c}" not in games.columns
     ]
     if missing:
+        need = "with_starters=True" if any("sp_form" in m for m in missing) else "with_form=True"
         raise ValueError(
-            "Statcast form columns absent — load games with "
-            f"load_games(with_form=True). Missing e.g. {missing[:3]}"
+            f"Statcast form columns absent — load games with load_games({need}). "
+            f"Missing e.g. {missing[:3]}"
         )
+
+
+# Starting-pitcher form differenced between the two starters. `sp_form_tto_penalty`
+# is carried explicitly: it is a difference of two other inputs, and a linear model
+# cannot construct that itself.
+_STARTER_DIFF_COLUMNS = (
+    "sp_form_xwoba_allowed",
+    "sp_form_xwoba_allowed_tto1",
+    "sp_form_xwoba_allowed_tto2",
+    "sp_form_xwoba_allowed_tto3plus",
+    "sp_form_tto_penalty",
+    "sp_form_batters_faced",
+    "sp_form_run_exp_allowed",
+    "sp_form_strikeouts",
+    "sp_form_walks",
+)
 
 
 @dataclass
@@ -195,6 +212,7 @@ class EloStatcastLogistic:
     name: str = "elo_statcast_logit"
     C: float = 1.0
     burn_in_seasons: int = 1
+    diff_columns: tuple[str, ...] = _DIFF_COLUMNS
     model: Pipeline | None = None
     feature_names: list[str] = field(default_factory=list)
     _elo: EloBaseline | None = None
@@ -202,7 +220,7 @@ class EloStatcastLogistic:
     def _design(self, games: pd.DataFrame, elo: np.ndarray) -> pd.DataFrame:
         p = np.clip(elo, 1e-9, 1 - 1e-9)
         cols: dict[str, np.ndarray] = {"elo_logit": np.log(p / (1 - p))}
-        for c in _DIFF_COLUMNS:
+        for c in self.diff_columns:
             cols[f"diff_{c}"] = games[f"home_{c}"].to_numpy(dtype=float) - games[
                 f"away_{c}"
             ].to_numpy(dtype=float)
@@ -213,7 +231,7 @@ class EloStatcastLogistic:
 
     def fit(self, games: pd.DataFrame) -> EloStatcastLogistic:
         _check_columns(games)
-        _require_form_columns(games)
+        _require_form_columns(games, self.diff_columns)
         played = games.dropna(subset=["home_win"])
         seasons = sorted(played["season"].unique())
         keep = seasons[self.burn_in_seasons :] if self.burn_in_seasons else seasons
@@ -233,6 +251,29 @@ class EloStatcastLogistic:
     def predict_proba(self, games: pd.DataFrame) -> np.ndarray:
         if self.model is None or self._elo is None:
             raise RuntimeError("EloStatcastLogistic.predict_proba called before fit")
-        _require_form_columns(games)
+        _require_form_columns(games, self.diff_columns)
         design = self._design(games, self._elo.predict_proba(games))
         return self.model.predict_proba(design.reindex(columns=self.feature_names))[:, 1]
+
+
+@dataclass
+class EloStarterLogistic(EloStatcastLogistic):
+    """Elo + team form + **starting-pitcher** form, including the TTO splits.
+
+    The direct test of why :class:`EloStatcastLogistic` failed. Thirty-game team
+    aggregates average over whoever happened to pitch, which discards the largest
+    single per-game input — tonight's starter — and leaves something close to a slow
+    restatement of team strength, which Elo already encodes. These features restore
+    it: each starter's own last ten starts, split by times through the order.
+    """
+
+    name: str = "elo_starter_logit"
+    diff_columns: tuple[str, ...] = _DIFF_COLUMNS + _STARTER_DIFF_COLUMNS
+
+
+@dataclass
+class StarterOnlyLogistic(EloStatcastLogistic):
+    """Elo + starter form, without team form — isolates the pitcher contribution."""
+
+    name: str = "elo_starter_only_logit"
+    diff_columns: tuple[str, ...] = _STARTER_DIFF_COLUMNS

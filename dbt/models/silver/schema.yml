@@ -46,3 +46,26 @@ models:
                 min_value: 0
                 max_value: 120
 
+  - name: sv_statcast_pitcher_game
+    description: >
+      Per-pitcher summary of a single game, split by times through the order.
+      Grain is (game_pk, pitcher). TTO is counted exactly (this batter vs this
+      pitcher), not approximated as plate-appearances/9.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, pitcher]
+    columns:
+      - name: game_pk
+        tests: [not_null]
+      - name: pitcher
+        tests: [not_null]
+      - name: xwoba_allowed
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 4, inclusive: true}
+      - name: batters_faced
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 60, inclusive: true}
+

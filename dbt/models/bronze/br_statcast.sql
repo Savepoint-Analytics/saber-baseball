@@ -15,6 +15,10 @@ select
     cast(woba_denom as double)                   as woba_denom,
     cast(launch_speed as double)                 as launch_speed,
     cast(delta_run_exp as double)                as delta_run_exp,
+    cast(pitcher as bigint)                      as pitcher,
+    cast(batter as bigint)                       as batter,
+    cast(inning as integer)                      as inning,
+    cast(at_bat_number as integer)               as at_bat_number,
     events,
     description
 from read_parquet({{ bronze_path('statcast') }}, union_by_name=true)

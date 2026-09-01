@@ -33,7 +33,13 @@ from src.models.baselines import (
     Log5Baseline,
     PythagoreanBaseline,
 )
-from src.models.statcast import EloStatcastLogistic, StatcastGBM, StatcastGBMNoElo
+from src.models.statcast import (
+    EloStarterLogistic,
+    EloStatcastLogistic,
+    StarterOnlyLogistic,
+    StatcastGBM,
+    StatcastGBMNoElo,
+)
 
 app = typer.Typer(add_completion=False, help="Backtest game-outcome models.")
 
@@ -52,6 +58,8 @@ MODELS: dict[str, Callable[[], Baseline]] = {
 # on a bare spine so the baselines can be run without the pitch-level layer built.
 FORM_MODELS: dict[str, Callable[[], Baseline]] = {
     "elo_statcast_logit": EloStatcastLogistic,
+    "elo_starter_logit": EloStarterLogistic,
+    "elo_starter_only_logit": StarterOnlyLogistic,
     "statcast_gbm": StatcastGBM,
     "statcast_gbm_no_elo": StatcastGBMNoElo,
 }
@@ -70,8 +78,30 @@ FORM_COLUMNS = (
     "games_in_window",
 )
 
+# Starting-pitcher form, joined per game via gd_starter_form.
+#
+# The starter's *identity* is legitimately known before a game — MLB announces
+# probable pitchers a day or more ahead — so using it is not look-ahead. What must
+# not leak is his performance *in* this game, which the rolling window excludes. A
+# live deployment would read the probable starter from the Stats API rather than from
+# the completed game, and that substitution changes nothing downstream.
+STARTER_COLUMNS = (
+    "sp_form_xwoba_allowed",
+    "sp_form_xwoba_allowed_tto1",
+    "sp_form_xwoba_allowed_tto2",
+    "sp_form_xwoba_allowed_tto3plus",
+    "sp_form_tto_penalty",
+    "sp_form_batters_faced",
+    "sp_form_run_exp_allowed",
+    "sp_form_strikeouts",
+    "sp_form_walks",
+    "starts_in_window",
+)
 
-def load_games(regular_only: bool = True, with_form: bool = False) -> pd.DataFrame:
+
+def load_games(
+    regular_only: bool = True, with_form: bool = False, with_starters: bool = False
+) -> pd.DataFrame:
     """Load the game spine from the DuckDB lake.
 
     Regular season only by default: the postseason is a biased sample (only good
@@ -97,6 +127,16 @@ def load_games(regular_only: bool = True, with_form: bool = False) -> pd.DataFra
               on h.game_pk = g.game_pk and h.team_id = g.home_team_id
             left join main_gold.gd_team_form a
               on a.game_pk = g.game_pk and a.team_id = g.away_team_id
+        """
+    if with_starters:
+        form_select += "," + ",".join(
+            f"hs.{c} as home_{c}, aws.{c} as away_{c}" for c in STARTER_COLUMNS
+        )
+        form_join += """
+            left join main_gold.gd_starter_form hs
+              on hs.game_pk = g.game_pk and hs.team_id = g.home_team_id
+            left join main_gold.gd_starter_form aws
+              on aws.game_pk = g.game_pk and aws.team_id = g.away_team_id
         """
 
     con = duckdb.connect(str(path), read_only=True)
@@ -269,7 +309,9 @@ def main(
         True, "--with-form/--no-form", help="Include the Statcast form models."
     ),
 ) -> None:
-    games = load_games(regular_only=not include_postseason, with_form=with_form)
+    games = load_games(
+        regular_only=not include_postseason, with_form=with_form, with_starters=with_form
+    )
     logger.info(
         "loaded {} games, seasons {}-{}", len(games), games.season.min(), games.season.max()
     )
