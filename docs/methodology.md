@@ -47,6 +47,22 @@ it — tennis publishes `tennis.*`, baseball publishes `baseball.*` (set via
 next vertical that did the same. The medallion layer is not lost by flattening
 because it already lives in the table-name prefix (`sv_`, `gd_`).
 
+## Joining Statcast to the game spine — join on `game_pk`, never on date
+
+Statcast dates a suspended or resumed game by its **original** date; `sv_games`
+dates it by the date it reached a final score (deliberately — see the model's own
+comment, it is what keeps time-ordered features from peeking ahead). The two
+therefore disagree for exactly those games.
+
+Concretely: game_pk 716404 (Mets-Marlins, 2023) sits at `game_date = 2023-10-02` in
+the spine, while its 236 pitches sit under `2023-09-28` in Statcast bronze. A
+date-based join drops the game; a `game_pk` join is correct. This is also why the
+backfill logs one "no rows" date per era — the pitches are not missing, they are
+filed under the other date.
+
+Coverage as of 2026-08-31: 8,184,213 pitches over 27,752 games, 2015-2026, and
+**zero** games in `sv_games` lack Statcast rows.
+
 ## Modeling sequence (PROJECT_CONTEXT §3)
 
 1. **Game-outcome prediction (primary).** Baselines first — home-field prior, Elo,
