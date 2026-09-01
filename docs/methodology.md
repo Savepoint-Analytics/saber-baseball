@@ -100,6 +100,38 @@ necessary check, never a ranking metric on its own. And Pythagorean beats Log5
 because run differential is the less luck-contaminated measure of the same strength
 (year-over-year r = 0.62 vs 0.57 on 2015-2026).
 
+## Statcast form does not beat Elo (measured 2026-09-01)
+
+The first model over the pitch-level data. Features are 30-game rolling team form
+(`gd_team_form`) — xwOBA created and allowed, wOBA, run-expectancy added, hard-hit
+rate — differenced between the two teams and evaluated on the same walk-forward
+harness.
+
+| Model | Log-loss | Brier | Accuracy | ECE |
+|-------|----------|-------|----------|-----|
+| Elo + Statcast (logistic) | 0.6779 | 0.2425 | 0.5700 | 0.0160 |
+| **Elo** | **0.6781** | 0.2426 | 0.5712 | 0.0150 |
+| Statcast GBM (incl. Elo) | 0.6800 | 0.2435 | 0.5673 | 0.0179 |
+| Statcast GBM (form only) | 0.6832 | 0.2451 | 0.5584 | 0.0156 |
+
+**The honest reading: Statcast team form adds nothing measurable.** The logistic
+blend's 0.0002 edge over Elo is not distinguishable from noise — paired per-game
+t = 0.49 over 16,608 games, better in only 4 of 7 seasons. Elo remains the model to
+beat. Reporting the blend as an improvement would be reading a rounding error.
+
+Two things are worth keeping from the negative result:
+
+- **The GBM lost to Elo while containing Elo as a feature** (0.6800 vs 0.6781). That
+  is variance, not absent signal: with games this close to coin flips, a booster with
+  enough capacity to find a small edge has more than enough to fit noise that swamps
+  it. The linear model in log-odds space could not chase that noise and landed level
+  with Elo. When the marginal signal is this thin, model capacity is a liability.
+- **Team-level 30-game aggregates are probably the wrong shape.** They smear away the
+  single largest per-game factor — the starting pitcher — along with bullpen state,
+  rest, and park. A 30-game rolling mean of team xwOBA is close to a slow-moving
+  restatement of team strength, which is exactly what Elo already encodes. That
+  suggests the next attempt should be pitcher-level, not team-level.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).
