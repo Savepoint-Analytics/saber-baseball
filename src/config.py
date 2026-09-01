@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     minio_access_key: str = Field(default="saber", alias="MINIO_ROOT_USER")
     minio_secret_key: str = Field(default="change-me", alias="MINIO_ROOT_PASSWORD")
     minio_bucket: str = Field(default="saber-bronze", alias="MINIO_BUCKET")
+    # Savepoint-Lab shares ONE `sabermetrics` bucket across verticals (soccer already
+    # owns `soccer/`), so baseball namespaces itself with a key prefix — the object
+    # store's equivalent of the schema-per-vertical rule for Postgres above. Without
+    # it every bronze write lands in the bucket root and collides with the next
+    # vertical that does the same.
+    minio_prefix: str = Field(default="", alias="MINIO_PREFIX")
 
     # ---- Orchestration ------------------------------------------------------
     # Prefect is the Savepoint-wide orchestrator (registry.md §6). Inside Compose the
@@ -95,7 +101,9 @@ class Settings(BaseSettings):
         ``s3://bucket`` when backend=minio, else a local ``data/bronze`` path.
         """
         if self.storage_backend == "minio":
-            return f"s3://{self.minio_bucket}"
+            prefix = self.minio_prefix.strip("/")
+            root = f"s3://{self.minio_bucket}"
+            return f"{root}/{prefix}" if prefix else root
         return str((self.data_dir / "bronze").resolve())
 
     @property

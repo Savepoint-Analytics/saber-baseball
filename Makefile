@@ -12,7 +12,7 @@ BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
         ingest-statcast ingest-retrosheet ingest-statsapi backfill dbt dbt-duckdb \
-        publish warehouse flows pipeline test lint fmt typecheck serve clean
+        publish sync-minio warehouse flows pipeline test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -51,11 +51,23 @@ backfill: ## Backfill schedules for BACKFILL_START..BACKFILL_END (default 2015..
 	uv run python -m src.ingestion.statsapi \
 		--start-season $(BACKFILL_START) --end-season $(BACKFILL_END)
 
+# dbt reads config from the environment, not from .env — without this it silently
+# falls back to every env_var() default (bucket `saber-bronze`, endpoint
+# `localhost:9000`) and a MinIO-backed build fails or, worse, reads the wrong data.
+# SABER_DATA_DIR is relative in .env, but dbt runs from dbt/, so it must be made
+# absolute here or a local-backend build looks for ./dbt/data/bronze and finds
+# nothing. Values already in the environment are overwritten by .env — .env is
+# the source of truth; change it there rather than prefixing the make call.
+ENVLOAD = set -a && . ./.env && SABER_DATA_DIR=$$(cd "$${SABER_DATA_DIR:-./data}" && pwd) && set +a
+
 dbt: ## Build dbt models against Postgres
-	cd dbt && uv run dbt build --target postgres
+	$(ENVLOAD) && cd dbt && uv run dbt build --target postgres
 
 dbt-duckdb: ## Build dbt bronze/silver models against DuckDB
-	cd dbt && uv run dbt build --target duckdb
+	$(ENVLOAD) && cd dbt && uv run dbt build --target duckdb
+
+sync-minio: ## Mirror the local bronze tree into MinIO on Savepoint-Lab
+	uv run python -m src.warehouse.sync_minio
 
 publish: ## Copy modeled silver/gold tables from DuckDB into the Postgres warehouse
 	uv run python -m src.warehouse.load_postgres

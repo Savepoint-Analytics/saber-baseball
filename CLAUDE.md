@@ -62,6 +62,15 @@ with DuckDB as the query engine.** Rationale documented so future agents underst
 - *Hybrid* gives cheap durable raw storage **and** a clean serving warehouse, all
   self-hosted (≈ $0 recurring) — directly serving the "affordable" mission.
 
+**Namespacing (both stores are shared across verticals).** Savepoint-Lab runs one
+`sports` Postgres database *and* one `sabermetrics` MinIO bucket for every vertical.
+Baseball owns the `baseball` Postgres schema (`POSTGRES_SCHEMA`) and the `baseball/`
+key prefix (`MINIO_PREFIX`). Writing to a bare schema or the bucket root collides
+with soccer/tennis — silently, since neither store errors on it.
+
+**MinIO ports:** `9000` is the S3 API, `9001` is the web console. `MINIO_ENDPOINT`
+must point at 9000; MinIO rejects S3 calls made to the console port.
+
 **Deploy:** Docker Compose on Savepoint-Lab running `postgres`, `minio`, `prefect-server`,
 and `prefect-flows`.
 Back up Postgres (`pg_dump` to MinIO) and snapshot MinIO buckets. Keep secrets in
