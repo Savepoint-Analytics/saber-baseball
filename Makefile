@@ -12,7 +12,7 @@ BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
         ingest-statcast ingest-retrosheet ingest-statsapi backfill dbt dbt-duckdb \
-        publish sync-minio warehouse flows pipeline test lint fmt typecheck serve clean
+        publish sync-minio warehouse flows pipeline backtest test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -79,6 +79,9 @@ flows: ## Serve the scheduled Prefect deployment (long-running; Ctrl-C to stop)
 
 pipeline: ## Run the full ingest -> dbt -> publish chain once, right now
 	uv run python -c "from orchestration.flows import daily_pipeline; daily_pipeline()"
+
+backtest: ## Walk-forward backtest of the baseline outcome models
+	uv run python -m src.models.backtest
 
 test: ## Run pytest
 	uv run pytest

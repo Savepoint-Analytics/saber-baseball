@@ -30,8 +30,11 @@ Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
 - `src/schemas/` — Pandera schemas that gate ingested tables.
 - `orchestration/flows.py` — **Prefect** flows chaining ingestion → `dbt build` →
   Postgres publish, on a 09:00 ET daily schedule.
-- `dbt/`, `src/{features,models,simulation,serving}/` — scaffolded with documented
-  stubs for the later phases.
+- `src/models/baselines.py` + `src/models/backtest.py` — **Phase 3 baselines**
+  (home-field, Log5, Pythagorean, Elo) and the walk-forward log-loss/calibration
+  harness. Elo sets the bar at **0.6788 log-loss**; see `docs/methodology.md`.
+- `dbt/`, `src/{features,simulation,serving}/` — scaffolded with documented stubs
+  for the later phases.
 
 ## Architecture at a glance
 
@@ -164,8 +167,9 @@ make dbt-duckdb                          # bronze → silver → gold
 2. **Phase 1 — Ingestion (current):** compliant bronze pipelines (Statcast, Retrosheet,
    Lahman, Chadwick) into MinIO/Parquet; Pandera-validated silver in Postgres.
 3. **Phase 2 — Run expectancy & WPA:** RE24/WPA tables from Retrosheet events.
-4. **Phase 3 — Prediction:** baselines (home-field, Elo, Pythagorean, log5) →
-   gradient-boosted + Bayesian outcome models; backtest + calibration.
+4. **Phase 3 — Prediction (baselines done):** home-field, Elo, Pythagorean and log5
+   are implemented and backtested (`make backtest`); gradient-boosted + Bayesian
+   outcome models must now beat Elo's 0.6788 log-loss.
 5. **Phase 4 — Season simulation:** Monte-Carlo schedule → playoff & World Series odds.
 6. **Phase 5 — Counterfactuals:** perturb player rate inputs, re-simulate, surface
    improvement levers; package as affordable analysis products.
