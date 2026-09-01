@@ -24,3 +24,25 @@ models:
                 values: [0, 1]
               config:
                 where: "home_win is not null"
+
+  - name: sv_statcast_team_game
+    description: >
+      Per-team Statcast summary of a single game (offence created / defence allowed).
+      Grain is (game_pk, team_id); joined to the spine on game_pk, never on date.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, team_id]
+    columns:
+      - name: game_pk
+        tests: [not_null]
+      - name: team_id
+        tests: [not_null]
+      - name: off_pa
+        description: "Plate appearances by this team in this game."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 120
+

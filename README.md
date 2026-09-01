@@ -167,9 +167,10 @@ make dbt-duckdb                          # bronze → silver → gold
 2. **Phase 1 — Ingestion (current):** compliant bronze pipelines (Statcast, Retrosheet,
    Lahman, Chadwick) into MinIO/Parquet; Pandera-validated silver in Postgres.
 3. **Phase 2 — Run expectancy & WPA:** RE24/WPA tables from Retrosheet events.
-4. **Phase 3 — Prediction (baselines done):** home-field, Elo, Pythagorean and log5
-   are implemented and backtested (`make backtest`); gradient-boosted + Bayesian
-   outcome models must now beat Elo's 0.6788 log-loss.
+4. **Phase 3 — Prediction (in progress):** home-field, Elo, Pythagorean and log5 are
+   implemented and backtested (`make backtest`). A Statcast-form GBM and an
+   Elo+Statcast logistic blend are also built — **neither measurably beats Elo**
+   (see `docs/methodology.md`). Elo at 0.6781 log-loss is still the bar.
 5. **Phase 4 — Season simulation:** Monte-Carlo schedule → playoff & World Series odds.
 6. **Phase 5 — Counterfactuals:** perturb player rate inputs, re-simulate, surface
    improvement levers; package as affordable analysis products.

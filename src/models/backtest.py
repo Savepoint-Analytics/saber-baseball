@@ -33,6 +33,7 @@ from src.models.baselines import (
     Log5Baseline,
     PythagoreanBaseline,
 )
+from src.models.statcast import EloStatcastLogistic, StatcastGBM, StatcastGBMNoElo
 
 app = typer.Typer(add_completion=False, help="Backtest game-outcome models.")
 
@@ -47,8 +48,30 @@ MODELS: dict[str, Callable[[], Baseline]] = {
     "elo": EloBaseline,
 }
 
+# Kept separate because these require Statcast form columns; MODELS must stay usable
+# on a bare spine so the baselines can be run without the pitch-level layer built.
+FORM_MODELS: dict[str, Callable[[], Baseline]] = {
+    "elo_statcast_logit": EloStatcastLogistic,
+    "statcast_gbm": StatcastGBM,
+    "statcast_gbm_no_elo": StatcastGBMNoElo,
+}
 
-def load_games(regular_only: bool = True) -> pd.DataFrame:
+
+FORM_COLUMNS = (
+    "form_off_xwoba",
+    "form_def_xwoba",
+    "form_off_woba",
+    "form_def_woba",
+    "form_off_run_exp",
+    "form_def_run_exp",
+    "form_net_run_exp",
+    "form_off_hard_hit_rate",
+    "form_def_hard_hit_rate",
+    "games_in_window",
+)
+
+
+def load_games(regular_only: bool = True, with_form: bool = False) -> pd.DataFrame:
     """Load the game spine from the DuckDB lake.
 
     Regular season only by default: the postseason is a biased sample (only good
@@ -63,15 +86,31 @@ def load_games(regular_only: bool = True) -> pd.DataFrame:
     where = "where home_win is not null"
     if regular_only:
         where += " and season_phase = 'regular'"
+    # Statcast form is joined on game_pk and team_id — never on date (a suspended
+    # game is filed under its original date in Statcast and its completion date in
+    # the spine, so a date join drops it; see docs/methodology.md).
+    form_select, form_join = "", ""
+    if with_form:
+        form_select = "," + ",".join(f"h.{c} as home_{c}, a.{c} as away_{c}" for c in FORM_COLUMNS)
+        form_join = """
+            left join main_gold.gd_team_form h
+              on h.game_pk = g.game_pk and h.team_id = g.home_team_id
+            left join main_gold.gd_team_form a
+              on a.game_pk = g.game_pk and a.team_id = g.away_team_id
+        """
+
     con = duckdb.connect(str(path), read_only=True)
     try:
         return con.sql(
             f"""
-            select game_pk, game_date, season, season_phase,
-                   home_team_id, away_team_id, home_score, away_score, home_win
-            from main_silver.sv_games
-            {where}
-            order by game_date, game_pk
+            select g.game_pk, g.game_date, g.season, g.season_phase,
+                   g.home_team_id, g.away_team_id, g.home_score, g.away_score,
+                   g.home_win
+                   {form_select}
+            from main_silver.sv_games g
+            {form_join}
+            {where.replace("home_win", "g.home_win").replace("season_phase", "g.season_phase")}
+            order by g.game_date, g.game_pk
             """
         ).df()
     finally:
@@ -226,13 +265,17 @@ def main(
     start_season: int = typer.Option(None, "--start-season", help="First season to score."),
     include_postseason: bool = typer.Option(False, "--include-postseason"),
     bins: int = typer.Option(10, "--bins", help="Reliability-curve buckets."),
+    with_form: bool = typer.Option(
+        True, "--with-form/--no-form", help="Include the Statcast form models."
+    ),
 ) -> None:
-    games = load_games(regular_only=not include_postseason)
+    games = load_games(regular_only=not include_postseason, with_form=with_form)
     logger.info(
         "loaded {} games, seasons {}-{}", len(games), games.season.min(), games.season.max()
     )
 
-    metrics, preds = walk_forward(games, start_season=start_season)
+    models = {**MODELS, **FORM_MODELS} if with_form else MODELS
+    metrics, preds = walk_forward(games, models=models, start_season=start_season)
 
     print("\n=== Per-season log-loss (lower is better) ===")
     wide = metrics.pivot_table(index="season", columns="model", values="log_loss")
