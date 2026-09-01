@@ -20,6 +20,7 @@ clean checkout (`PROJECT_CONTEXT.md` §5). Concretely:
 
 ```
 sources → src/ingestion (rate-limited, cached) → bronze Parquet
+        → MinIO s3://sabermetrics/baseball/ (Savepoint-Lab)
         → dbt (duckdb) bronze views → silver → gold marts, all in DuckDB
         → src/warehouse/load_postgres → silver + gold copied into Postgres (baseball.*)
         → src/features, src/models, src/simulation → MLflow + serving

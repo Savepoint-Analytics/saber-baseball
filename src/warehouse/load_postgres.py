@@ -83,6 +83,7 @@ def publish(dry_run: bool = False) -> dict[str, int]:
         con.execute(f"CREATE SCHEMA IF NOT EXISTS pg.{warehouse_schema}")
 
     counts: dict[str, int] = {}
+    plan: list[tuple[str, str, int]] = []
     for layer, tables in PUBLISHED.items():
         for table in tables:
             source = f"main_{layer}.{table}"
@@ -90,13 +91,31 @@ def publish(dry_run: bool = False) -> dict[str, int]:
             row = con.sql(f"select count(*) from {source}").fetchone()
             rows = int(row[0]) if row else 0
             counts[f"{warehouse_schema}.{table}"] = rows
-            if dry_run:
-                logger.info("[dry-run] would publish {} rows: {} -> {}", rows, source, target)
-                continue
+            plan.append((source, target, rows))
+
+    if dry_run:
+        for source, target, rows in plan:
+            logger.info("[dry-run] would publish {} rows: {} -> {}", rows, source, target)
+        con.close()
+        return counts
+
+    # All marts land or none do. Publishing table-by-table outside a transaction
+    # means a failure halfway leaves Postgres serving a new sv_games beside a stale
+    # gd_team_season_record — two tables that disagree about the same season, which
+    # is worse for a BI consumer than simply being a day behind. Postgres DDL is
+    # transactional, so the replaces roll back together.
+    con.execute("BEGIN TRANSACTION")
+    try:
+        for source, target, rows in plan:
             con.execute(f"CREATE OR REPLACE TABLE {target} AS SELECT * FROM {source}")
             logger.success("published {} rows: {} -> {}", rows, source, target)
-
-    con.close()
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        logger.error("publish failed; rolled back — Postgres left as it was")
+        raise
+    finally:
+        con.close()
     return counts
 
 
