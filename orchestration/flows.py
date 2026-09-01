@@ -6,7 +6,10 @@ and a UI, then carries the chain all the way through to the serving warehouse:
     ingest (bronze Parquet) → dbt build (DuckDB) → publish (Postgres baseball.*)
 
 Prefect (not Dagster) is the Savepoint orchestrator across every vertical — see
-``registry.md`` §6 for the decision and its reasoning.
+``registry.md`` §6. Savepoint-Lab runs ONE Prefect server shared by all of them, so
+flow and deployment names are a global namespace: everything baseball registers is
+prefixed ``baseball-``, the same rule as the ``baseball`` Postgres schema and the
+``baseball/`` MinIO prefix.
 
 Run::
 
@@ -123,7 +126,7 @@ def publish_warehouse(dry_run: bool = False) -> dict[str, int]:
     return counts
 
 
-@flow(name="daily-pipeline", log_prints=True)
+@flow(name="baseball-daily-pipeline", log_prints=True)
 def daily_pipeline(
     season: int | None = None,
     day: date | None = None,
@@ -160,7 +163,7 @@ def daily_pipeline(
 def serve() -> None:
     """Serve the scheduled deployment (the long-running process in Compose)."""
     daily_pipeline.serve(
-        name="daily",
+        name="baseball-daily",
         # 09:00 ET daily, after the prior day's games settle. The timezone must ride
         # on the schedule object: Flow.serve's bare `cron=` kwarg has no timezone
         # companion, so it would silently schedule in UTC.
