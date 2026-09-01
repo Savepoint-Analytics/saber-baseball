@@ -28,8 +28,10 @@ Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
 - `src/compliance/attributions.py` — canonical attribution strings, auto-stamped onto
   every export.
 - `src/schemas/` — Pandera schemas that gate ingested tables.
-- `dbt/`, `orchestration/`, `src/{features,models,simulation,serving}/` — scaffolded
-  with documented stubs for the later phases.
+- `orchestration/flows.py` — **Prefect** flows chaining ingestion → `dbt build` →
+  Postgres publish, on a 09:00 ET daily schedule.
+- `dbt/`, `src/{features,models,simulation,serving}/` — scaffolded with documented
+  stubs for the later phases.
 
 ## Architecture at a glance
 
@@ -46,7 +48,7 @@ Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
             │   │ JSON, dated   │                └──────────────┘      │ Postgres │ │
             │   └───────────────┘                                      │ silver + │ │
             │                                                          │  gold    │ │
-            │   Dagster orchestrates all assets · MLflow tracks models └────┬─────┘ │
+            │   Prefect orchestrates every flow · MLflow tracks models  └────┬─────┘ │
             └──────────────────────────────────────────────────────────────┼───────┘
                                                                             ▼
                                               Models (sklearn/XGB/PyMC) · Sim engine
@@ -56,7 +58,7 @@ Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
 - **MinIO** = cheap raw landing zone (pitch-level Statcast, raw API JSON).
 - **PostgreSQL** = curated warehouse (dims, features, model outputs) for serving/BI.
 - **DuckDB** = fast OLAP over Parquet without bloating Postgres.
-- **dbt** = tested, documented bronze→silver→gold transforms. **Dagster** = orchestration.
+- **dbt** = tested, documented bronze→silver→gold transforms. **Prefect** = orchestration.
 
 See `CLAUDE.md` §4 for the full rationale (and why not Postgres-only or MinIO-only).
 
@@ -73,7 +75,7 @@ saber-baseball/
 ├── public-data-sources.md        # data catalog + ToS + attributions
 │
 ├── pyproject.toml                # uv-managed deps + lockfile (uv.lock)
-├── docker-compose.yml            # postgres + minio + dagster
+├── docker-compose.yml            # postgres + minio + prefect
 ├── .env.example                  # config template (never commit real .env)
 ├── .gitignore
 ├── Makefile                      # common commands (ingest, build, test, sim)
@@ -97,7 +99,7 @@ saber-baseball/
 │   └── serving/                  # Streamlit apps, report builders [stub]
 │
 ├── dbt/                          # dbt project (bronze → silver → gold)
-├── orchestration/                # Dagster definitions (assets, schedules)
+├── orchestration/                # Prefect flows (tasks, schedules)
 ├── r/                            # R-only tasks (renv); baseballr helpers
 ├── notebooks/                    # exploration ONLY — no production logic
 ├── tests/                        # pytest: transforms, models, Pandera schemas
@@ -113,7 +115,7 @@ uv sync && source .venv/bin/activate
 cp .env.example .env            # fill in Postgres + MinIO credentials
 
 # 2. Infra on Savepoint-Lab
-docker compose up -d            # postgres, minio, dagster
+docker compose up -d            # postgres, minio, prefect
 
 # 3. First pull (compliant: Retrosheet + Lahman + Chadwick + Statcast-derived)
 make ingest SEASON=2025
@@ -125,6 +127,17 @@ make test
 # 5. Explore
 make serve                      # streamlit run src/serving/app.py
 ```
+
+Orchestration (Prefect) runs the whole chain — ingest → dbt → publish — for you:
+
+```bash
+make pipeline                   # run the full chain once, right now
+make flows                      # serve the 09:00 ET daily schedule (long-running)
+```
+
+`docker compose up -d` also brings up the Prefect API/UI at
+<http://localhost:4200> (`PREFECT_PORT`) plus a `prefect-flows` service that serves
+the daily deployment.
 
 To try ingestion directly without Make:
 

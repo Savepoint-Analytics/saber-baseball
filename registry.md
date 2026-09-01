@@ -3,7 +3,7 @@
 > Inventory of every repo, package, and tool incorporated into this vertical, with
 > **license**, language, role, and status. Agents must consult this before adding a
 > new dependency. License obligations are summarized here and enforced in `CLAUDE.md`.
-> **Last updated:** 2026-06-28
+> **Last updated:** 2026-08-31
 
 ---
 
@@ -46,7 +46,7 @@
 | Warehouse (curated) | **PostgreSQL** | PostgreSQL (permissive) | Modeled tables, dims, features, model outputs. |
 | Local OLAP engine | **DuckDB** | MIT | Query Parquet in MinIO directly (`httpfs`) — fast analytics without loading all into Postgres. |
 | Transformation | **dbt-core** (`dbt-postgres` / `dbt-duckdb`) | Apache-2.0 | Versioned, tested, documented SQL transforms; medallion modeling. |
-| Orchestration | **Dagster** (or cron+Make to start) | Apache-2.0 | Asset-based pipelines with lineage; lightweight for solo ops. |
+| Orchestration | **Prefect** (or cron+Make to start) | Apache-2.0 | Python-native flows/tasks; one orchestrator across all Savepoint verticals (§6). |
 | DataFrames | **pandas** + **Polars** + **PyArrow** | BSD / MIT / Apache | Polars for large Statcast pulls; Arrow/Parquet as interchange. |
 | Modeling | **scikit-learn, XGBoost, LightGBM, statsmodels** | BSD/Apache/MIT | Outcome models, baselines. |
 | Bayesian | **PyMC / bambi** | Apache-2.0 | Partial-pooled player rates, counterfactuals. |
@@ -55,12 +55,12 @@
 | Serving / BI | **Streamlit** + **Metabase** | Apache / AGPL | Dashboards + ad-hoc BI over Postgres. |
 | Python env | **uv** (or Poetry) | MIT/Apache | Fast, reproducible deps + lockfile. |
 | R env | **renv** + `baseballr` | MIT | Reproducible R for the few R-only tasks. |
-| Containers | **Docker Compose** | Apache-2.0 | Run Postgres + MinIO + Dagster on Savepoint-Lab. |
+| Containers | **Docker Compose** | Apache-2.0 | Run Postgres + MinIO + Prefect on Savepoint-Lab. |
 
 ## 4. License compliance summary (code)
 
 - **Permissive (MIT/BSD/Apache):** pybaseball, baseballr, mlbgame, DuckDB, dbt,
-  Dagster, scikit-learn, etc. — free for commercial use; retain copyright notices.
+  Prefect, scikit-learn, etc. — free for commercial use; retain copyright notices.
 - **Copyleft (GPLv3):** MLB-StatsAPI — fine as a runtime dependency for producing
   analysis; do not redistribute as part of a closed binary.
 - **Copyleft (AGPLv3):** MinIO server, Metabase — fine to self-host and use; AGPL
@@ -92,3 +92,44 @@ Pinned in `pyproject.toml`. All permissive and free for commercial use; retain n
 
 > GPLv3 **MLB-StatsAPI** and AGPLv3 **MinIO** are used per §2/§4 above (runtime / self-host
 > unmodified). No new copyleft obligations introduced by the scaffold.
+
+## 6. Decision record — orchestrator: Prefect, not Dagster (2026-08-31)
+
+**Decision:** Prefect is the orchestrator for this vertical and for Savepoint as a
+whole. Dagster is not used.
+
+**Context.** The initial scaffold (commit `401a0e1`, 2026-06-28) wrote Dagster into
+`CLAUDE.md` §3, this file, `pyproject.toml`, `docker-compose.yml`, and
+`orchestration/definitions.py` without ever naming Prefect as an alternative. No
+comparison was recorded, so this was a default that propagated, not a decision. It
+also left baseball as the odd one out: Soccer pins `prefect>=3.0` and carries
+`PREFECT_API_URL` in real config code, Tennis specifies Prefect, and Football and
+Basketball list "Dagster or Prefect" as undecided.
+
+**Why Prefect.**
+- **One orchestrator across five verticals.** For a solo operator, a single tool to
+  learn, deploy, and debug everywhere is worth more than any per-tool feature. This
+  is the deciding factor.
+- **It is already the house default** in the verticals with running code.
+- **The job is modest.** The orchestrator here runs four pullers, then `dbt build`,
+  then a Postgres publish, daily. Both tools do that trivially; the reproducibility
+  contract in `docs/methodology.md` is carried by dbt tests, Pandera, and MLflow —
+  not by the orchestrator.
+- **Cost to switch was near zero.** The Dagster surface was 85 lines and 4 assets,
+  with the dbt integration still an unimplemented TODO.
+
+**What we knowingly gave up.**
+- `dagster-dbt`'s `@dbt_assets` would have surfaced per-model lineage across the dbt
+  DAG in the orchestrator UI. In Prefect, `dbt build` is one task and lineage lives
+  in dbt docs instead.
+- Dagster's partitions map naturally onto the `season=` layout in bronze, making
+  backfills a first-class concept. Prefect keeps driving backfills through the
+  existing CLI parameterization (`make backfill`), which is what the Makefile
+  already did.
+
+Neither loss is material at this stage. Revisit if the asset graph grows large
+enough that dbt-model-level lineage in the orchestrator UI becomes the thing that
+makes failures diagnosable.
+
+**License:** Prefect is Apache-2.0 — commercial use fine; retain notices. Replaces
+`dagster` / `dagster-webserver` in the `orchestration` extra.

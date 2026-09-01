@@ -2,7 +2,7 @@
 
 > **Vertical:** Sports → Baseball (MLB Sabermetrics)
 > **Inherits:** `../../COMPANY_CONTEXT.md`
-> **Last updated:** 2026-06-28
+> **Last updated:** 2026-08-31
 
 ---
 
@@ -75,7 +75,7 @@ repo now ships working, compliant bronze-layer pullers for Statcast, Retrosheet,
 Lahman, Chadwick, and the MLB Stats API (shared rate-limit + cache + backoff;
 auto-stamped attributions; Pandera schema gates). Models/features/simulation remain
 documented stubs. Next: land Pandera-validated silver tables in Postgres and wire dbt
-+ Dagster end to end.
++ Prefect end to end.
 
 ## 7. Modeling approach (intended)
 

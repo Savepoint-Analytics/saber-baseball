@@ -25,6 +25,10 @@ sources → src/ingestion (rate-limited, cached) → bronze Parquet
         → src/features, src/models, src/simulation → MLflow + serving
 ```
 
+The ingest → dbt → publish leg of that chain is sequenced by **Prefect**
+(`orchestration/flows.py`, daily at 09:00 ET). dbt tests run inside the flow, so a
+failed test stops the run before anything reaches Postgres.
+
 **Why transforms run in DuckDB and not against Postgres directly.** The bronze
 models are `read_parquet()` views, and `read_parquet` is a DuckDB function that
 Postgres does not have, so `dbt build --target postgres` fails to compile the bronze

@@ -12,7 +12,7 @@ BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
         ingest-statcast ingest-retrosheet ingest-statsapi backfill dbt dbt-duckdb \
-        publish warehouse test lint fmt typecheck serve clean
+        publish warehouse flows pipeline test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -24,7 +24,7 @@ setup: ## Create venv + install all dependency groups
 sync: ## Install runtime deps only (Phase-1 ingestion)
 	uv sync
 
-infra-up: ## Start Postgres + MinIO + Dagster on Savepoint-Lab
+infra-up: ## Start Postgres + MinIO + Prefect on Savepoint-Lab
 	docker compose up -d
 
 infra-down: ## Stop the local stack
@@ -61,6 +61,12 @@ publish: ## Copy modeled silver/gold tables from DuckDB into the Postgres wareho
 	uv run python -m src.warehouse.load_postgres
 
 warehouse: dbt-duckdb publish ## Transform in DuckDB, then publish results to Postgres
+
+flows: ## Serve the scheduled Prefect deployment (long-running; Ctrl-C to stop)
+	uv run python -m orchestration.flows
+
+pipeline: ## Run the full ingest -> dbt -> publish chain once, right now
+	uv run python -c "from orchestration.flows import daily_pipeline; daily_pipeline()"
 
 test: ## Run pytest
 	uv run pytest

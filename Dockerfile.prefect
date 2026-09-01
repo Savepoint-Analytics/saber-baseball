@@ -1,0 +1,22 @@
+# Minimal image to run Prefect + the ingestion/warehouse code on Savepoint-Lab.
+# 3.12 matches the dev venv, CI, and [tool.mypy] python_version so the container
+# runs the same interpreter the code is linted and type-checked against.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# uv for fast, reproducible installs.
+RUN pip install --no-cache-dir uv
+
+# Install deps first (better layer caching). orchestration + warehouse extras:
+# the flows shell out to `dbt build`, so dbt must be on PATH in this image.
+COPY pyproject.toml README.md ./
+RUN uv pip install --system ".[orchestration,warehouse]"
+
+COPY . .
+
+EXPOSE 4200
+CMD ["python", "-m", "orchestration.flows"]

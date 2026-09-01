@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     minio_secret_key: str = Field(default="change-me", alias="MINIO_ROOT_PASSWORD")
     minio_bucket: str = Field(default="saber-bronze", alias="MINIO_BUCKET")
 
+    # ---- Orchestration ------------------------------------------------------
+    # Prefect is the Savepoint-wide orchestrator (registry.md §6). Inside Compose the
+    # prefect-flows service overrides this to the service name; on a dev box the
+    # localhost default points at `prefect server start`.
+    prefect_api_url: str = Field(default="http://localhost:4200/api", alias="PREFECT_API_URL")
+
     # ---- Ingestion politeness (compliance) ----------------------------------
     bbref_rpm: int = Field(default=18, alias="SABER_BBREF_RPM")
     savant_rpm: int = Field(default=30, alias="SABER_SAVANT_RPM")

@@ -38,8 +38,7 @@ warehouse = [
     "dbt-duckdb>=1.8",         # Apache-2.0
 ]
 orchestration = [
-    "dagster>=1.7",            # Apache-2.0
-    "dagster-webserver>=1.7",  # Apache-2.0
+    "prefect>=3.0",            # Apache-2.0
 ]
 modeling = [
     "scikit-learn>=1.5",       # BSD
