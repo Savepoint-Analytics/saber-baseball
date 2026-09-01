@@ -132,6 +132,45 @@ Two things are worth keeping from the negative result:
   restatement of team strength, which is exactly what Elo already encodes. That
   suggests the next attempt should be pitcher-level, not team-level.
 
+## Starting-pitcher features (measured 2026-09-01)
+
+The follow-up the team-form failure implied: replace 30-game team aggregates with
+each **starting pitcher's** own last ten starts, split by times through the order
+(`sv_statcast_pitcher_game` → `gd_starter_form`).
+
+| Model | Log-loss | Gain vs Elo | Seasons won | per-game t |
+|-------|----------|-------------|-------------|------------|
+| Elo + starter form | **0.6770** | +0.00112 | 6/7 | 1.60 |
+| Elo + starter + team form | 0.6770 | +0.00108 | 5/7 | 1.42 |
+| Elo + team form only | 0.6779 | +0.00019 | 4/7 | 0.49 |
+| Elo | 0.6781 | — | — | — |
+
+**Read this as promising, not proven.** Starter form is roughly six times the effect
+of team form and beats Elo in six of seven held-out seasons, but a paired per-game
+t of 1.60 over 16,608 games does not clear the conventional 1.96 bar. It is the first
+feature set that has moved the needle at all; it is not yet a result to publish.
+
+Two supporting observations:
+
+- **Adding team form on top of starter form makes it slightly worse** (5/7 seasons vs
+  6/7). Team aggregates are not merely weak, they are largely redundant with what Elo
+  and the starter already carry, and spending parameters on them costs more than it
+  returns.
+- **The pipeline independently reproduces the times-through-order penalty**, which is
+  a good check that the TTO computation is right rather than plausible-looking:
+  starter xwOBA allowed rises .3098 → .3270 → .3483 from the first time through the
+  order to the third (+.0385).
+
+TTO is counted exactly — how many times *this batter* has already faced *this
+pitcher* in this game — rather than as plate-appearances/9, which drifts whenever a
+lineup turns over irregularly (pinch hitters, a mid-inning pitching change), i.e.
+exactly the situations TTO analysis cares about.
+
+A note on what is and is not known before a game: the starter's **identity** is
+announced a day or more ahead, so using it is not look-ahead. His performance *in*
+the game is excluded by the lagged window. A live deployment would read the probable
+starter from the Stats API instead of the completed game; nothing downstream changes.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).

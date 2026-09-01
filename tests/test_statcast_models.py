@@ -14,12 +14,16 @@ import pytest
 from src.models.baselines import Baseline
 from src.models.statcast import (
     _DIFF_COLUMNS,
+    _STARTER_DIFF_COLUMNS,
+    EloStarterLogistic,
     EloStatcastLogistic,
+    StarterOnlyLogistic,
     StatcastGBM,
     StatcastGBMNoElo,
 )
 
 FORM_MODELS = (StatcastGBM, StatcastGBMNoElo, EloStatcastLogistic)
+STARTER_MODELS = (EloStarterLogistic, StarterOnlyLogistic)
 
 
 def _games(seasons=(2020, 2021, 2022), teams=(1, 2, 3, 4), seed=0) -> pd.DataFrame:
@@ -54,9 +58,11 @@ def _games(seasons=(2020, 2021, 2022), teams=(1, 2, 3, 4), seed=0) -> pd.DataFra
                         "away_games_in_window": 30,
                     }
                     # Form tracks true strength, plus noise.
-                    for c in _DIFF_COLUMNS:
+                    for c in _DIFF_COLUMNS + _STARTER_DIFF_COLUMNS:
                         row[f"home_{c}"] = (5 - home) * 0.1 + rng.normal(0, 0.02)
                         row[f"away_{c}"] = (5 - away) * 0.1 + rng.normal(0, 0.02)
+                    row["home_starts_in_window"] = 10
+                    row["away_starts_in_window"] = 10
                     rows.append(row)
     return pd.DataFrame(rows)
 
@@ -130,3 +136,48 @@ def test_burn_in_seasons_never_empties_the_training_set():
     g = _games(seasons=(2021,))
     model = EloStatcastLogistic(burn_in_seasons=1).fit(g)
     assert model.model is not None
+
+
+# --- starting-pitcher models ----------------------------------------------
+@pytest.mark.parametrize("factory", STARTER_MODELS)
+def test_starter_models_satisfy_the_protocol_and_predict(factory):
+    g = _games()
+    model = factory().fit(g[g.season < 2022])
+    p = model.predict_proba(g[g.season == 2022])
+    assert isinstance(model, Baseline)
+    assert len(p) == (g.season == 2022).sum()
+    assert np.all((p > 0) & (p < 1))
+
+
+@pytest.mark.parametrize("factory", STARTER_MODELS)
+def test_missing_starter_columns_name_the_right_loader_flag(factory):
+    """The error must say with_starters=True, not the team-form flag."""
+    g = _games().drop(columns=[f"home_{c}" for c in _STARTER_DIFF_COLUMNS])
+    with pytest.raises(ValueError, match="with_starters=True"):
+        factory().fit(g)
+
+
+@pytest.mark.parametrize("factory", STARTER_MODELS)
+def test_starter_models_are_causal(factory):
+    """Flipping a game's own result must not move its own prediction."""
+    g = _games()
+    train, test = g[g.season < 2022], g[g.season == 2022].reset_index(drop=True)
+    before = factory().fit(train).predict_proba(test)[7]
+    flipped = test.copy()
+    flipped.loc[7, "home_win"] = 1.0 - flipped.loc[7, "home_win"]
+    assert factory().fit(train).predict_proba(flipped)[7] == pytest.approx(before)
+
+
+def test_starter_feature_set_actually_includes_the_tto_columns():
+    """The TTO splits are the reason this model exists; guard against silent drops."""
+    cols = EloStarterLogistic().diff_columns
+    assert "sp_form_xwoba_allowed_tto1" in cols
+    assert "sp_form_xwoba_allowed_tto3plus" in cols
+    assert "sp_form_tto_penalty" in cols
+
+
+def test_starter_only_model_excludes_team_form():
+    """StarterOnlyLogistic isolates the pitcher contribution; team form must be out."""
+    cols = set(StarterOnlyLogistic().diff_columns)
+    assert cols == set(_STARTER_DIFF_COLUMNS)
+    assert not cols & set(_DIFF_COLUMNS)
