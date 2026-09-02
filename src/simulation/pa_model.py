@@ -20,6 +20,13 @@ The combination, per outcome ``o``::
     raw(o) = batter_rate(o) * pitcher_rate(o) * state_rate(o) / league_rate(o)^2
     P(o)   = raw(o) / sum over outcomes of raw
 
+The **side** term carries home-field advantage. It is not a fudge factor bolted on
+to hit a target win rate: home and away batters demonstrably differ, and the pattern
+is the one you would predict — home batters strike out 4% less often, walk 5% more
+and homer 4% more. Without it the engine is perfectly symmetric and returns a 50%
+home win probability against a real 52.8%, which would make every playoff odds
+calculation wrong.
+
 The **state** term is not decoration. Outcome rates are strongly conditional on the
 base-out state — the walk rate ranges from 0.057 to 0.150 against a league 0.085, and
 peaks exactly where baseball says it should: runners on second and third with two
@@ -100,6 +107,7 @@ class PAOutcomeModel:
     batters: pd.DataFrame = field(default_factory=pd.DataFrame)
     pitchers: pd.DataFrame = field(default_factory=pd.DataFrame)
     states: pd.DataFrame = field(default_factory=pd.DataFrame)
+    sides: pd.DataFrame = field(default_factory=pd.DataFrame)
     batter_k: dict[str, float] = field(default_factory=dict)
     pitcher_k: dict[str, float] = field(default_factory=dict)
 
@@ -120,6 +128,12 @@ class PAOutcomeModel:
         self.batters, self.batter_k = _shrunk_rates(counts, self.league)
         self.pitchers, self.pitcher_k = _shrunk_rates(pitcher_counts, self.league)
 
+        if "is_home_batting" in pa.columns:
+            side_counts = pd.crosstab(pa["is_home_batting"], pa["outcome"]).reindex(
+                index=[False, True], columns=list(OUTCOMES), fill_value=0
+            )
+            self.sides, _ = _shrunk_rates(side_counts, self.league)
+
         if "state_before" in pa.columns:
             state_counts = pd.crosstab(pa["state_before"], pa["outcome"]).reindex(
                 index=range(24), columns=list(OUTCOMES), fill_value=0
@@ -137,8 +151,19 @@ class PAOutcomeModel:
             return np.tile(lg, (24, 1))
         return self.states.to_numpy(dtype=float)
 
+    def side_probabilities(self) -> np.ndarray:
+        """Home/away batting rates, shape ``(2, 9)``; row 1 is the home team batting."""
+        lg = self.league_probabilities()
+        if self.sides.empty:
+            return np.tile(lg, (2, 1))
+        return self.sides.to_numpy(dtype=float)
+
     def probabilities(
-        self, batter: int | None, pitcher: int | None, state: int | None = None
+        self,
+        batter: int | None,
+        pitcher: int | None,
+        state: int | None = None,
+        home_batting: bool | None = None,
     ) -> np.ndarray:
         """Outcome distribution for one matchup, optionally in a base-out state.
 
@@ -160,6 +185,8 @@ class PAOutcomeModel:
         raw = b * p / np.maximum(lg, 1e-12)
         if state is not None and not self.states.empty:
             raw = raw * self.states.to_numpy(dtype=float)[state] / np.maximum(lg, 1e-12)
+        if home_batting is not None and not self.sides.empty:
+            raw = raw * self.side_probabilities()[int(home_batting)] / np.maximum(lg, 1e-12)
         total = raw.sum()
         return lg.copy() if total <= 0 else raw / total
 

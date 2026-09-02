@@ -143,7 +143,8 @@ def load_plate_appearances(seasons: tuple[int, ...] | None = None) -> pd.DataFra
         return con.sql(
             f"""
             select season, game_pk, batter, pitcher, stand, p_throws,
-                   outcome, state_before, runs_on_play
+                   outcome, state_before, runs_on_play,
+                   inning_topbot = 'Bot' as is_home_batting
             from main_silver.sv_plate_appearances
             {where}
             """
