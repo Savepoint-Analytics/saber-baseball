@@ -45,6 +45,17 @@ def _fetch_schedule(start: str, end: str, sport_id: int = 1) -> pd.DataFrame:
             "startDate": start,
             "endDate": end,
             "gameTypes": "R,F,D,L,W",  # regular + postseason rounds
+            # Hydrating weather and venue costs nothing extra — it rides on the same
+            # one-request-per-date-range call. Fetching weather per game instead would
+            # be ~27,700 requests, roughly eight hours at our StatsAPI rate cap, for
+            # data the schedule endpoint will hand over for free.
+            #
+            # probablePitcher is captured for a different reason: the starter features
+            # in gd_starter_form are keyed off who actually started, which is fine for
+            # a backtest but unavailable pre-game. The announced probable is what a
+            # live deployment must use, so it is landed now rather than discovered
+            # missing later.
+            "hydrate": "weather,venue,probablePitcher",
         },
     )
     rows: list[dict] = []
@@ -65,6 +76,20 @@ def _fetch_schedule(start: str, end: str, sport_id: int = 1) -> pd.DataFrame:
                     "away_team": teams.get("away", {}).get("team", {}).get("name"),
                     "away_score": teams.get("away", {}).get("score"),
                     "venue": g.get("venue", {}).get("name"),
+                    "venue_id": g.get("venue", {}).get("id"),
+                    "day_night": g.get("dayNight"),
+                    # Weather is absent for postponed games and for some older
+                    # seasons; downstream models must tolerate nulls rather than
+                    # assume coverage.
+                    "weather_condition": (g.get("weather") or {}).get("condition"),
+                    "weather_temp": (g.get("weather") or {}).get("temp"),
+                    "weather_wind": (g.get("weather") or {}).get("wind"),
+                    "home_probable_pitcher_id": (
+                        (teams.get("home", {}).get("probablePitcher") or {}).get("id")
+                    ),
+                    "away_probable_pitcher_id": (
+                        (teams.get("away", {}).get("probablePitcher") or {}).get("id")
+                    ),
                 }
             )
     return pd.DataFrame(rows)

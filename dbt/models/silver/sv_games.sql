@@ -59,6 +59,30 @@ select
         when home_score is null or away_score is null then null
         when home_score > away_score then 1 else 0
     end                                          as home_win,
-    venue
+    venue,
+    cast(venue_id as integer)                    as venue_id,
+    day_night,
+    weather_condition,
+    -- Arrives as a string; a dome reports a constant indoor temperature rather than
+    -- a null, so `is_indoor` below is what tells a model to ignore it.
+    try_cast(weather_temp as integer)            as weather_temp_f,
+    weather_wind,
+    -- "7 mph, In From CF" -> 7. Retractable roofs report "0 mph, None".
+    try_cast(regexp_extract(weather_wind, '^(\d+)', 1) as integer) as wind_mph,
+    -- Direction relative to the batter. Out-blowing wind carries fly balls; in-blowing
+    -- suppresses them; crosswinds mostly do neither. Collapsed to one signed feature
+    -- because the raw string has ~20 variants that all reduce to this.
+    case
+        when weather_wind is null then null
+        when weather_wind ilike '%out to%' then 1
+        when weather_wind ilike '%in from%' then -1
+        else 0
+    end                                          as wind_out_sign,
+    -- A closed roof or dome makes every other weather column meaningless. Flagging it
+    -- lets a model learn "ignore temperature here" instead of treating a constant 70F
+    -- dome reading as a real warm day.
+    weather_condition in ('Roof Closed', 'Dome') as is_indoor,
+    home_probable_pitcher_id,
+    away_probable_pitcher_id
 from ranked
 where _completion_rank = 1

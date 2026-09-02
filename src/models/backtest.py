@@ -34,6 +34,9 @@ from src.models.baselines import (
     PythagoreanBaseline,
 )
 from src.models.statcast import (
+    EloContextLogistic,
+    EloStarterBullpenContextLogistic,
+    EloStarterBullpenLogistic,
     EloStarterLogistic,
     EloStatcastLogistic,
     StarterOnlyLogistic,
@@ -60,6 +63,9 @@ FORM_MODELS: dict[str, Callable[[], Baseline]] = {
     "elo_statcast_logit": EloStatcastLogistic,
     "elo_starter_logit": EloStarterLogistic,
     "elo_starter_only_logit": StarterOnlyLogistic,
+    "elo_starter_bullpen_logit": EloStarterBullpenLogistic,
+    "elo_sp_bp_context_logit": EloStarterBullpenContextLogistic,
+    "elo_context_logit": EloContextLogistic,
     "statcast_gbm": StatcastGBM,
     "statcast_gbm_no_elo": StatcastGBMNoElo,
 }
@@ -98,9 +104,35 @@ STARTER_COLUMNS = (
     "starts_in_window",
 )
 
+# Bullpen quality and fatigue, per team, from gd_bullpen_form.
+BULLPEN_COLUMNS = (
+    "bp_form_relief_xwoba_allowed",
+    "bp_form_relief_run_exp_allowed",
+    "bp_form_relief_bf",
+    "bp_form_relievers_used",
+    "bp_recent_bf",
+    "bp_games_in_window",
+)
+
+# Game context. Unlike the others these are NOT differenced between the two teams —
+# both clubs play in the same park, in the same weather. They can only matter through
+# an interaction (a park that suits how the home team is built, a cold night that
+# suppresses an offence built on power), so a linear model may well find nothing here.
+CONTEXT_COLUMNS = (
+    "park_factor",
+    "weather_temp_f",
+    "wind_mph",
+    "wind_out_sign",
+    "is_indoor",
+)
+
 
 def load_games(
-    regular_only: bool = True, with_form: bool = False, with_starters: bool = False
+    regular_only: bool = True,
+    with_form: bool = False,
+    with_starters: bool = False,
+    with_bullpen: bool = False,
+    with_context: bool = False,
 ) -> pd.DataFrame:
     """Load the game spine from the DuckDB lake.
 
@@ -127,6 +159,26 @@ def load_games(
               on h.game_pk = g.game_pk and h.team_id = g.home_team_id
             left join main_gold.gd_team_form a
               on a.game_pk = g.game_pk and a.team_id = g.away_team_id
+        """
+    if with_bullpen:
+        form_select += "," + ",".join(
+            f"hb.{c} as home_{c}, ab.{c} as away_{c}" for c in BULLPEN_COLUMNS
+        )
+        form_join += """
+            left join main_gold.gd_bullpen_form hb
+              on hb.game_pk = g.game_pk and hb.team_id = g.home_team_id
+            left join main_gold.gd_bullpen_form ab
+              on ab.game_pk = g.game_pk and ab.team_id = g.away_team_id
+        """
+    if with_context:
+        form_select += (
+            ", coalesce(pf.park_factor, 1.0) as park_factor,"
+            " g.weather_temp_f, g.wind_mph, g.wind_out_sign,"
+            " cast(g.is_indoor as integer) as is_indoor"
+        )
+        form_join += """
+            left join main_gold.gd_park_factor pf
+              on pf.season = g.season and pf.venue_id = g.venue_id
         """
     if with_starters:
         form_select += "," + ",".join(
@@ -310,7 +362,11 @@ def main(
     ),
 ) -> None:
     games = load_games(
-        regular_only=not include_postseason, with_form=with_form, with_starters=with_form
+        regular_only=not include_postseason,
+        with_form=with_form,
+        with_starters=with_form,
+        with_bullpen=with_form,
+        with_context=with_form,
     )
     logger.info(
         "loaded {} games, seasons {}-{}", len(games), games.season.min(), games.season.max()
