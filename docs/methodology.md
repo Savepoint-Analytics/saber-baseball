@@ -221,6 +221,70 @@ bullpen + context — monotonically worse with every group added. `gd_bullpen_fo
 and useful for run-environment work (park-adjusted player value in Phase 2), but they
 are **not** part of the best outcome model.
 
+## Simulation engine: PA model and transition matrix (validated 2026-09-02)
+
+Phases 4-5 need a plate-appearance engine, not a better game-level classifier —
+final-score *distributions*, playoff odds, and counterfactuals are impossible from a
+single win probability. Two halves are built and validated; the game loop is not
+written yet, deliberately.
+
+**Data.** No Retrosheet needed for 2015+. Statcast carries the full game state
+(`on_1b/2b/3b`, `outs_when_up`, score), all 24 base-out states appear, and the
+outcome vocabulary collapses to nine classes.
+
+**PA outcome model** (`src/simulation/pa_model.py`) uses the **odds-ratio method**:
+
+    raw(o) = batter(o) * pitcher(o) * state(o) / league(o)^2
+
+Player rates are shrunk toward league by empirical Bayes with a beta-binomial
+method-of-moments regression constant. The constants are *estimated*, and they land
+on the published sabermetric values without being told them — K ≈ 53 PA (published
+~60-70), BB ≈ 126 (~110-120) — while correctly regressing doubles (k ≈ 2937) and
+reach-on-error (k ≈ 4497) almost entirely to league, both being luck rather than
+skill. PyMC was skipped: it does not currently import (an ArviZ break), and every
+Phase 3 experiment found added model capacity *cost* accuracy on this data.
+
+**Transition matrix** (`gd_base_transitions`) is the empirical
+`P(next state, runs | state, outcome)`, so baserunning is measured rather than
+hand-coded. It reproduces the known pattern exactly: a single with a runner on second
+scores him 37.8% of the time with none out, 51.7% with one out, 79.7% with two —
+the runner goes on contact.
+
+### Validation, before any game loop
+
+| Check | Result |
+|-------|--------|
+| Analytic RE24 vs measured RE24 | mean abs diff **0.024**, max 0.090 |
+| Expected runs per team-game | **4.426 vs 4.484 actual (−1.28%)** |
+| Bases empty / 0 out | 0.498 vs 0.508 measured |
+| Bases loaded / 0 out | 2.317 vs 2.395 measured |
+
+The analytic solve uses *only* the transition matrix (`RE = (I − Q)⁻¹ b`), while the
+measured RE24 is computed independently in dbt — so agreement tests the matrix on its
+own, and any later disagreement is the game loop's fault.
+
+**The residual −1.3% is understood, not unexplained.** The chain assumes a
+league-average pitcher at every plate appearance. Reality selects: the pitcher who
+has loaded the bases is a worse one. Pitcher quality by state correlates **+0.79**
+with run expectancy (0.3251 on-base allowed with the bases loaded and none out
+versus 0.3133 with bases empty and two out). Batter quality, by contrast, is flat
+across states (0.321-0.324) — the first hypothesis, lineup clustering, was tested and
+**rejected**. The game loop simulates specific pitchers and substitutes them, so it
+does not inherit this assumption.
+
+### Two bugs this validation caught
+
+Both produced plausible numbers and would have survived into published results.
+
+- **Walk-off half-innings were never excluded.** `outs_after` coalesces a missing
+  next PA to 3, so `max(outs_after) = 3` for every half-inning and the filter matched
+  nothing. It surfaced as 1.25% of bases-loaded home runs appearing to end an
+  inning — which is impossible, and is now a dbt test.
+- **0.135 runs per game were unattributed.** Runs scoring mid-PA (wild pitch, passed
+  ball, steal of home) were dropped because runs were read off the PA's final pitch.
+  Measuring first pitch to last took game reconciliation from 2,126/2,430 to
+  2,420/2,430 and cut the run-scoring gap from −2.9% to −1.3%.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).

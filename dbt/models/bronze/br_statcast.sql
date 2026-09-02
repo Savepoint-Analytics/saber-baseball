@@ -19,6 +19,14 @@ select
     cast(batter as bigint)                       as batter,
     cast(inning as integer)                      as inning,
     cast(at_bat_number as integer)               as at_bat_number,
+    cast(outs_when_up as integer)                as outs_when_up,
+    on_1b,
+    on_2b,
+    on_3b,
+    cast(bat_score as integer)                   as bat_score,
+    cast(post_bat_score as integer)              as post_bat_score,
+    stand,
+    p_throws,
     events,
     description
 from read_parquet({{ bronze_path('statcast') }}, union_by_name=true)
