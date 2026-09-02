@@ -83,3 +83,41 @@ models:
           - dbt_utils.accepted_range:
               arguments: {min_value: 1, max_value: 60, inclusive: true}
 
+  - name: sv_plate_appearances
+    description: >
+      One row per plate appearance with base-out state before and after and runs
+      produced. Foundation for run expectancy and the PA simulation engine.
+      Grain is (game_pk, at_bat_number).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, at_bat_number]
+    columns:
+      - name: outcome
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["K", "BB", "HBP", "1B", "2B", "3B", "HR", "ROE", "OUT"]
+      - name: outs_before
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 2, inclusive: true}
+      - name: outs_after
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 3, inclusive: true}
+      - name: runs_on_play
+        description: >
+          Runs scoring during this PA, measured first pitch to last so mid-PA runs
+          (wild pitch, steal of home) are included. Can exceed 4: a run on a wild
+          pitch followed by a grand slam is 5.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 6, inclusive: true}
+      - name: state_before
+        description: "Canonical base-out state 0-23 (outs*8 + base code)."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 23, inclusive: true}
+
