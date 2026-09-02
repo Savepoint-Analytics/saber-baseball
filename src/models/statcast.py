@@ -79,6 +79,24 @@ _STARTER_DIFF_COLUMNS = (
 )
 
 
+_BULLPEN_DIFF_COLUMNS = (
+    "bp_form_relief_xwoba_allowed",
+    "bp_form_relief_run_exp_allowed",
+    "bp_form_relief_bf",
+    "bp_form_relievers_used",
+    "bp_recent_bf",
+)
+
+# Game context: shared by both teams, so these enter raw rather than differenced.
+_CONTEXT_COLUMNS = (
+    "park_factor",
+    "weather_temp_f",
+    "wind_mph",
+    "wind_out_sign",
+    "is_indoor",
+)
+
+
 @dataclass
 class StatcastGBM:
     """Gradient-boosted classifier on Statcast form differences (+ optional Elo)."""
@@ -194,6 +212,15 @@ class StatcastGBMNoElo(StatcastGBM):
     include_elo: bool = False
 
 
+def _require_context_columns(games: pd.DataFrame, columns: tuple[str, ...]) -> None:
+    missing = [c for c in columns if c not in games.columns]
+    if missing:
+        raise ValueError(
+            "Game-context columns absent — load games with "
+            f"load_games(with_context=True). Missing {missing}"
+        )
+
+
 @dataclass
 class EloStatcastLogistic:
     """Elo blended with Statcast form through a regularised logistic regression.
@@ -213,6 +240,7 @@ class EloStatcastLogistic:
     C: float = 1.0
     burn_in_seasons: int = 1
     diff_columns: tuple[str, ...] = _DIFF_COLUMNS
+    context_columns: tuple[str, ...] = ()
     model: Pipeline | None = None
     feature_names: list[str] = field(default_factory=list)
     _elo: EloBaseline | None = None
@@ -224,6 +252,9 @@ class EloStatcastLogistic:
             cols[f"diff_{c}"] = games[f"home_{c}"].to_numpy(dtype=float) - games[
                 f"away_{c}"
             ].to_numpy(dtype=float)
+        # Context is shared by both teams, so it enters raw rather than differenced.
+        for c in self.context_columns:
+            cols[c] = games[c].to_numpy(dtype=float)
         # A missing form difference means "we know nothing extra", and zero is
         # exactly that in a differenced design — it leaves the Elo offset untouched
         # rather than inventing a lean either way.
@@ -232,6 +263,7 @@ class EloStatcastLogistic:
     def fit(self, games: pd.DataFrame) -> EloStatcastLogistic:
         _check_columns(games)
         _require_form_columns(games, self.diff_columns)
+        _require_context_columns(games, self.context_columns)
         played = games.dropna(subset=["home_win"])
         seasons = sorted(played["season"].unique())
         keep = seasons[self.burn_in_seasons :] if self.burn_in_seasons else seasons
@@ -252,6 +284,7 @@ class EloStatcastLogistic:
         if self.model is None or self._elo is None:
             raise RuntimeError("EloStatcastLogistic.predict_proba called before fit")
         _require_form_columns(games, self.diff_columns)
+        _require_context_columns(games, self.context_columns)
         design = self._design(games, self._elo.predict_proba(games))
         return self.model.predict_proba(design.reindex(columns=self.feature_names))[:, 1]
 
@@ -277,3 +310,34 @@ class StarterOnlyLogistic(EloStatcastLogistic):
 
     name: str = "elo_starter_only_logit"
     diff_columns: tuple[str, ...] = _STARTER_DIFF_COLUMNS
+
+
+@dataclass
+class EloStarterBullpenLogistic(EloStatcastLogistic):
+    """Elo + starter form + **bullpen** quality and fatigue.
+
+    The starter is only the first ~22 batters; someone else finishes. This adds who
+    that is likely to be and how hard they have been worked — ``bp_recent_bf`` is a
+    *state* rather than a skill, and it is the one thing here that no season-long
+    rating like Elo can carry.
+    """
+
+    name: str = "elo_starter_bullpen_logit"
+    diff_columns: tuple[str, ...] = _STARTER_DIFF_COLUMNS + _BULLPEN_DIFF_COLUMNS
+
+
+@dataclass
+class EloStarterBullpenContextLogistic(EloStarterBullpenLogistic):
+    """Adds park factor and weather on top of starter + bullpen."""
+
+    name: str = "elo_sp_bp_context_logit"
+    context_columns: tuple[str, ...] = _CONTEXT_COLUMNS
+
+
+@dataclass
+class EloContextLogistic(EloStatcastLogistic):
+    """Elo + park/weather only — isolates whether game context adds anything at all."""
+
+    name: str = "elo_context_logit"
+    diff_columns: tuple[str, ...] = ()
+    context_columns: tuple[str, ...] = _CONTEXT_COLUMNS

@@ -82,3 +82,34 @@ models:
           - dbt_utils.accepted_range:
               arguments: {min_value: 0, max_value: 10, inclusive: true}
 
+  - name: gd_bullpen_form
+    description: >
+      Rolling bullpen quality (30 games) and recent workload/fatigue (3 games) per
+      team, as known before each game. Grain is (game_pk, team_id).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, team_id]
+    columns:
+      - name: bp_recent_bf
+        description: "Batters faced by the bullpen in the previous 3 games (fatigue)."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 200, inclusive: true}
+
+  - name: gd_park_factor
+    description: >
+      Run-scoring park factor per (season, venue_id), built from the three seasons
+      before the target season so it is never fitted on the runs it is applied to.
+      1.0 is neutral. Venues with < 200 window games fall back to 1.0.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, venue_id]
+    columns:
+      - name: park_factor
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0.6, max_value: 1.6, inclusive: true}
+

@@ -13,8 +13,13 @@ import pytest
 
 from src.models.baselines import Baseline
 from src.models.statcast import (
+    _BULLPEN_DIFF_COLUMNS,
+    _CONTEXT_COLUMNS,
     _DIFF_COLUMNS,
     _STARTER_DIFF_COLUMNS,
+    EloContextLogistic,
+    EloStarterBullpenContextLogistic,
+    EloStarterBullpenLogistic,
     EloStarterLogistic,
     EloStatcastLogistic,
     StarterOnlyLogistic,
@@ -24,6 +29,7 @@ from src.models.statcast import (
 
 FORM_MODELS = (StatcastGBM, StatcastGBMNoElo, EloStatcastLogistic)
 STARTER_MODELS = (EloStarterLogistic, StarterOnlyLogistic)
+CONTEXT_MODELS = (EloStarterBullpenLogistic, EloStarterBullpenContextLogistic, EloContextLogistic)
 
 
 def _games(seasons=(2020, 2021, 2022), teams=(1, 2, 3, 4), seed=0) -> pd.DataFrame:
@@ -58,11 +64,13 @@ def _games(seasons=(2020, 2021, 2022), teams=(1, 2, 3, 4), seed=0) -> pd.DataFra
                         "away_games_in_window": 30,
                     }
                     # Form tracks true strength, plus noise.
-                    for c in _DIFF_COLUMNS + _STARTER_DIFF_COLUMNS:
+                    for c in _DIFF_COLUMNS + _STARTER_DIFF_COLUMNS + _BULLPEN_DIFF_COLUMNS:
                         row[f"home_{c}"] = (5 - home) * 0.1 + rng.normal(0, 0.02)
                         row[f"away_{c}"] = (5 - away) * 0.1 + rng.normal(0, 0.02)
                     row["home_starts_in_window"] = 10
                     row["away_starts_in_window"] = 10
+                    for c in _CONTEXT_COLUMNS:
+                        row[c] = float(rng.normal(1.0, 0.1))
                     rows.append(row)
     return pd.DataFrame(rows)
 
@@ -181,3 +189,47 @@ def test_starter_only_model_excludes_team_form():
     cols = set(StarterOnlyLogistic().diff_columns)
     assert cols == set(_STARTER_DIFF_COLUMNS)
     assert not cols & set(_DIFF_COLUMNS)
+
+
+# --- bullpen + game-context models ----------------------------------------
+@pytest.mark.parametrize("factory", CONTEXT_MODELS)
+def test_bullpen_and_context_models_predict(factory):
+    g = _games()
+    p = factory().fit(g[g.season < 2022]).predict_proba(g[g.season == 2022])
+    assert len(p) == (g.season == 2022).sum()
+    assert np.all((p > 0) & (p < 1))
+
+
+def test_context_columns_actually_reach_the_design_matrix():
+    """Regression test for a silent bug.
+
+    The context loop was once missing from ``_design``. Nothing raised: the model
+    fitted, predicted, and scored — it simply ignored park and weather entirely, and
+    produced predictions byte-identical to the model without them. That is the worst
+    kind of defect here, because it yields a confident and completely wrong answer to
+    "do these features help?". Assert the columns are really used.
+    """
+    g = _games()
+    with_ctx = EloStarterBullpenContextLogistic().fit(g[g.season < 2022])
+    without = EloStarterBullpenLogistic().fit(g[g.season < 2022])
+
+    assert set(_CONTEXT_COLUMNS) <= set(with_ctx.feature_names)
+    assert not set(_CONTEXT_COLUMNS) & set(without.feature_names)
+    assert len(with_ctx.feature_names) == len(without.feature_names) + len(_CONTEXT_COLUMNS)
+
+    test = g[g.season == 2022]
+    assert not np.allclose(with_ctx.predict_proba(test), without.predict_proba(test))
+
+
+def test_missing_context_columns_name_the_right_loader_flag():
+    g = _games().drop(columns=list(_CONTEXT_COLUMNS))
+    with pytest.raises(ValueError, match="with_context=True"):
+        EloContextLogistic().fit(g)
+
+
+def test_context_enters_raw_not_differenced():
+    """Both teams share the park and the weather; differencing them would be zero."""
+    g = _games()
+    m = EloContextLogistic().fit(g[g.season < 2022])
+    assert "park_factor" in m.feature_names
+    assert "diff_park_factor" not in m.feature_names

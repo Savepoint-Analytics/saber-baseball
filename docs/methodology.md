@@ -171,6 +171,56 @@ announced a day or more ahead, so using it is not look-ahead. His performance *i
 the game is excluded by the lagged window. A live deployment would read the probable
 starter from the Stats API instead of the completed game; nothing downstream changes.
 
+## Bullpen and game context make it worse (measured 2026-09-01)
+
+Bullpen quality and fatigue (`gd_bullpen_form`), then park factor and weather
+(`gd_park_factor` + weather hydrated onto the schedule), added on top of the starter
+model.
+
+| Model | Log-loss | vs Elo | Seasons won |
+|-------|----------|--------|-------------|
+| **Elo + starter form** | **0.67691** | +0.00114 | 6/7 |
+| Elo + starter + team form | 0.67696 | +0.00111 | 5/7 |
+| Elo + starter + bullpen | 0.67739 | +0.00067 | 5/7 |
+| Elo + starter + bullpen + context | 0.67771 | +0.00034 | 5/7 |
+| Elo | 0.67805 | — | — |
+| Elo + park/weather only | 0.67822 | −0.00016 | 2/7 |
+
+**Both additions are significant — in the wrong direction.** Measured against the
+starter model, paired per game:
+
+| Addition | Δ log-loss | Seasons won | t |
+|----------|-----------|-------------|---|
+| + bullpen | −0.00047 | 1/7 | **−2.00** |
+| + bullpen + context | −0.00080 | 2/7 | **−2.79** |
+| context, on top of bullpen | −0.00033 | 2/7 | **−2.05** |
+
+Not a regularisation artifact: the ordering (starter-only < +bullpen < +bullpen+context)
+holds at every strength tested, C ∈ {0.01, 0.1, 1, 10}.
+
+Why they fail is not the same in the two cases:
+
+- **Bullpen** is largely already inside Elo. A team with a poor bullpen loses games it
+  led, and Elo sees exactly that — the bullpen's contribution reaches the rating
+  through the results it produced. The extra columns mostly restate it while costing
+  variance. The one genuinely new signal, `bp_recent_bf` (fatigue, a *state* rather
+  than a skill), is not strong enough on its own to pay for the other four.
+- **Park and weather are symmetric.** Both clubs play the same park in the same
+  weather, so these shift the *run environment*, not who wins. The temperature effect
+  on scoring is real and large in this data — 8.43 runs/game at 40 °F rising to 10.30
+  at 90 °F — but a shared effect on total runs is close to orthogonal to a
+  home-win probability. It could only help through an interaction with roster
+  construction, and no such interaction is detectable at this sample size.
+
+**The consistent lesson across every experiment in this phase: feature count is a
+liability here.** MLB games sit near a coin flip, so any feature that does not carry
+signal beyond Elo costs more in variance than it returns. The ranked results are, in
+order, Elo + starter, Elo + starter + team, Elo + starter + bullpen, Elo + starter +
+bullpen + context — monotonically worse with every group added. `gd_bullpen_form`,
+`gd_park_factor` and the weather columns are kept because they are correct, tested,
+and useful for run-environment work (park-adjusted player value in Phase 2), but they
+are **not** part of the best outcome model.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).
