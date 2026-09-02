@@ -285,6 +285,42 @@ Both produced plausible numbers and would have survived into published results.
   Measuring first pitch to last took game reconciliation from 2,126/2,430 to
   2,420/2,430 and cut the run-scoring gap from −2.9% to −1.3%.
 
+### Lineups and substitution policy
+
+The third engine component (`src/simulation/lineup.py`), answering what a game loop
+asks between plate appearances: who bats, and who is pitching.
+
+**Batting slot is derived by rule, not inferred.** A team's k-th plate appearance is
+slot `((k-1) mod 9) + 1`, because the order is fixed and a substitute inherits the
+slot of the man he replaces. Exact, and it avoids reconstructing substitutions from
+roster data we do not hold. Slot PA counts fall monotonically 22,442 (leadoff) to
+18,174 (ninth) across 2025, as the rules require.
+
+**The substitution policy is measured, not written.** A hand-coded rule ("pull the
+starter after 100 pitches") encodes a guess about managerial behaviour, and that is
+exactly what moves between eras. `gd_pitcher_removal` holds the empirical hazard:
+
+| Times through order | Batters faced | Removal hazard |
+|---|---|---|
+| 1st | ≤6 | 0.004 |
+| 2nd | 13-18 | 0.017 |
+| 3rd | 19-24 | 0.145 |
+| 3rd | 25-30 | 0.393 |
+| 4th | 25-30 | 0.504 |
+
+The third-time-through hook is visible in the data, and it tightened across eras
+(hazard 0.174 in 2015-2018, 0.231 in 2019-2022, 0.218 in 2023-2026) — which is why
+the table is bucketed by era rather than pooled.
+
+**Validation:** sampling the hazard plate appearance by plate appearance, exactly as
+the game loop will, produces starter outings of **21.56 batters faced against an
+actual 21.75 (−0.9%)**, with matching median (22 vs 23) and 90th percentile (27 vs
+27).
+
+Bullpen selection is weighted by real appearance counts and excludes arms already
+used in the game — without that exclusion a simulated team brings its best reliever
+back twice and every bullpen looks deeper than it is.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).

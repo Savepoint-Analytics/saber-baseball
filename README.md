@@ -173,7 +173,11 @@ make dbt-duckdb                          # bronze → silver → gold
    times through the order) reaches 0.6769 vs Elo's 0.6781 and wins 6 of 7 seasons,
    but is not yet statistically significant. Bullpen form and park/weather were also
    tried and make it significantly **worse**. See `docs/methodology.md`.
-5. **Phase 4 — Season simulation:** Monte-Carlo schedule → playoff & World Series odds.
+5. **Phase 4 — Season simulation (engine in progress):** the plate-appearance engine
+   is built and validated — PA outcome model (odds-ratio), base-out transition matrix,
+   lineups and substitution policy. Run scoring reproduces the league to within 1.3%
+   and starter workloads to within 1%. The game loop is next; then Monte-Carlo
+   schedule → playoff & World Series odds.
 6. **Phase 5 — Counterfactuals:** perturb player rate inputs, re-simulate, surface
    improvement levers; package as affordable analysis products.
 
