@@ -321,6 +321,63 @@ Bullpen selection is weighted by real appearance counts and excludes arms alread
 used in the game — without that exclusion a simulated team brings its best reliever
 back twice and every bullpen looks deeper than it is.
 
+### The game loop
+
+`src/simulation/game_engine.py` steps the validated components into complete games.
+**Vectorised across simulations, not plate appearances** — every simulation of a
+matchup advances one PA in lockstep with finished half-innings masked out. A per-PA
+Python loop over a full backtest is ~1.3 billion iterations; this runs at **~7,100
+simulated games per second**.
+
+Rules handled explicitly because each is easy to get silently wrong: the home team
+does not bat in the ninth or later when ahead, a bottom-half rally stops the instant
+the home team leads, and extra innings start with a runner on second from 2020.
+
+**Home-field advantage is a fourth odds-ratio term**, not a fudge factor. Home and
+away batters measurably differ — home batters strike out 4% less often, walk 5% more
+and homer 3% more — and the term is fitted from that split. Without it the engine is
+perfectly symmetric and returns a 50.4% home win rate, which would make every playoff
+odds calculation wrong.
+
+**Validation** against 2025, using real lineups, real starters and real bullpens:
+
+| Quantity | Simulated | Actual | |
+|---|---|---|---|
+| Home runs/game | 4.536 | 4.490 | +0.046 |
+| Away runs/game | 4.512 | 4.405 | +0.107 |
+| **Home win %** | **52.6%** | **52.8%** (2023-26 era) | −0.2pp |
+| 1-run games | 29.8% | 29.4% | +0.4pp |
+| Runs/team mean | 4.480 | 4.447 | +0.7% |
+
+Note the home-win comparison is against the **era the model was fitted on** (52.8%);
+2025 alone ran high at 54.3%.
+
+Faithfulness to the matrix is checked separately: with league-average players and
+exactly nine innings the away team scores 4.501 against an analytic 9 × RE(0) of
+4.479 — **1.8 standard errors**, statistically indistinguishable. So the loop steps
+the transition matrix it was validated against, and the earlier apparent excess was
+extra innings, not a bug.
+
+### Known limitation: the engine is under-dispersed
+
+| | Simulated | Actual |
+|---|---|---|
+| Runs/team, sd | 2.99 | **3.25** |
+| Shutouts | 11.1% | 13.6% |
+| 11+ run games | 3.9% | 5.2% |
+
+The mean is right and the spread is ~8% too narrow: too few blowouts, too few
+shutouts. This is the signature of assuming plate appearances are independent. Real
+games carry correlated, game-level effects the engine does not yet model — park
+(`gd_park_factor` exists and is unused here; Coors 1.272 vs T-Mobile 0.866),
+temperature (measured at 8.43 runs/game at 40 °F rising to 10.30 at 90 °F), and
+day-to-day variation in a pitcher's true form.
+
+**This matters for Phase 4.** Under-dispersed game scores make playoff odds
+*over-confident* — the tails are where postseason probability lives. Wiring park and
+weather into the engine as game-level multipliers is the first thing to do before
+trusting simulated World Series odds, and both data sources are already built.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).
