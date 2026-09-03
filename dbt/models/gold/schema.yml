@@ -191,3 +191,16 @@ models:
       - name: log_ratio
         tests: [not_null]
 
+  - name: gd_pitcher_form_direction
+    description: >
+      Shape of a pitcher's bad night vs his good night, split within-pitcher on
+      K-BB rate. Direction only — the magnitude of day-to-day form is estimated
+      separately from a variance decomposition.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [era, outcome]
+    columns:
+      - name: log_ratio
+        tests: [not_null]
+

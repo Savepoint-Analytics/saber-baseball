@@ -406,12 +406,68 @@ Roughly a quarter of the shortfall is closed and the remaining three quarters ar
 park or weather.
 
 The wiring is still right — it is physically real, correctly calibrated, and the
-engine should price Coors differently from T-Mobile. But anyone chasing dispersion
-should look elsewhere: day-to-day variation in a pitcher's true form, and correlated
-outcomes within a game (a pitcher losing command for an inning), are where the
-remaining variance lives. Both are random effects rather than observable covariates,
-so they need a different mechanism — overdispersion in the PA model — not another
-lookup table.
+engine should price Coors differently from T-Mobile.
+
+### Locating the missing variance
+
+Before adding anything else, the deficit was decomposed. **Per half-inning the engine
+is almost exact** (sd ratio 1.026; the full run distribution matches within a tenth of
+a percent). The problem only appears when innings are summed into games:
+
+| Source | Share of the 1.25 variance gap |
+|---|---|
+| Between-inning correlation | 0.77 (**61%**) |
+| Within-inning | 0.49 (39%) |
+
+Real game variance (10.54) exceeds nine times real *inning* variance (9.77), so
+innings in the same game genuinely hang together. A per-outing pitcher effect can
+address the 61%; it structurally cannot touch the 39%, being constant within a game.
+
+### Day-to-day pitcher form
+
+`src/simulation/form.py` draws one multiplier per pitcher per simulated game, held for
+every batter he faces.
+
+**Direction** comes from `gd_pitcher_form_direction`, split on **fastball velocity**.
+Two earlier splits were rejected: sorting starts by runs allowed is selection on the
+dependent variable (the bad third is partly bad luck), and sorting by
+strikeout-minus-walk rate mechanically exaggerates two of the nine outcomes being
+measured — it made walks appear to more than double. Velocity is observed before any
+outcome and is not one of the measured quantities. The trade is that it tracks stuff
+rather than command, so the direction leans toward the strikeout axis.
+
+**Magnitude** is estimated, not tuned: observed per-game variance exceeds binomial by
+a ratio of **1.0184**, putting a starter's true form at an on-base sd of **0.0132**,
+about 4% of his baseline. The velocity split independently gives .308 vs .321 — a gap
+of .013. Two unrelated methods, the same number.
+
+**Mean preservation** is required and the offset is negative (−0.018), exactly as
+convexity predicts: runs rise faster with a worse pitcher than they fall with a better
+one, so an uncorrected even mix of nights inflates offense.
+
+### The result: 5% of the gap
+
+| | Base | +park/weather | +park/weather+form | Actual |
+|---|---|---|---|---|
+| Runs/team mean | 4.503 | 4.550 | 4.507 | 4.447 |
+| **Runs/team sd** | 3.006 | 3.068 | **3.052** | **3.246** |
+| Shutouts | 11.1% | 11.3% | 11.5% | 13.6% |
+| Home win % | 51.9% | 51.8% | 52.1% | 54.3% |
+
+Form is within noise of nothing, and theory agrees: propagating the calibrated sigma
+through the Markov solve gives a run-rate sd of 0.052 per outing, covering ~58% of a
+game's batters, which supplies about **5%** of the shortfall.
+
+Both attempts at the dispersion problem are now measured and both are small: park and
+weather ~25%, pitcher form ~5%. **Roughly 70% remains unexplained**, and the two
+mechanisms most likely to hold it are not yet modelled — team **defence**, which is
+persistent within a game and currently league-average for everyone, and the
+within-inning sequencing that a per-game multiplier cannot reach by construction.
+
+Both could have been faked. Turning up sigma until the blowouts appeared would have
+matched the target while claiming pitchers vary far more than the evidence supports,
+and every simulated game would have inherited that claim. The effect goes in at its
+measured size and the shortfall is reported.
 
 ## Evaluation
 
