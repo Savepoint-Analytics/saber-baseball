@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from src.simulation.context import RunEnvironment
 from src.simulation.lineup import (
     BF_BUCKETS,
     LINEUP_SIZE,
@@ -118,6 +119,10 @@ class GameSimulator:
     pa_model: PAOutcomeModel
     transitions: TransitionMatrix
     policy: SubstitutionPolicy
+    # Park and weather as a shared per-game run environment. Optional so the engine
+    # still runs on a lake without the context marts, and so the effect of adding it
+    # can be measured against the same engine without.
+    run_environment: RunEnvironment | None = None
     ghost_runner_from_inning: int | None = 10
     max_innings: int = 30
     _hazard: np.ndarray = field(init=False)
@@ -152,7 +157,15 @@ class GameSimulator:
         away: TeamSetup,
         n_sims: int = 1000,
         rng: np.random.Generator | None = None,
+        run_environment: float = 1.0,
     ) -> GameResult:
+        """Simulate one matchup.
+
+        ``run_environment`` is the park x weather run multiplier for this game (1.0 is
+        neutral). Both teams share it — they play the same park in the same weather —
+        so it does not move win probability directly. What it does is widen the spread
+        of scores across games, which is what the engine was under-doing.
+        """
         rng = rng or np.random.default_rng()
         lg = self.pa_model.league_probabilities()
         state_rates = self.pa_model.state_probabilities()
@@ -160,6 +173,13 @@ class GameSimulator:
         # factor divides by the league rate once more.
         side_rates = self.pa_model.side_probabilities()
         lg3 = np.maximum(lg, 1e-12) ** 3
+        # A pure multiplier on rates rather than an odds-ratio term, so it is applied
+        # after the division by league and before renormalisation.
+        env_mult = (
+            self.run_environment.outcome_multiplier(run_environment)
+            if self.run_environment is not None
+            else 1.0
+        )
 
         setups = (away, home)
         tables = [self._rate_tables(s) for s in setups]
@@ -210,7 +230,7 @@ class GameSimulator:
                         * state_rates[state[idx]]
                         * side_rates[batting]
                         / lg3
-                    )
+                    ) * env_mult
                     probs = raw / raw.sum(axis=1, keepdims=True)
                     outcome = (probs.cumsum(axis=1) < rng.random((k, 1))).sum(axis=1)
                     outcome = np.minimum(outcome, len(OUTCOMES) - 1)
