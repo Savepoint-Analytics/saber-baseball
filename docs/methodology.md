@@ -374,9 +374,44 @@ temperature (measured at 8.43 runs/game at 40 °F rising to 10.30 at 90 °F), an
 day-to-day variation in a pitcher's true form.
 
 **This matters for Phase 4.** Under-dispersed game scores make playoff odds
-*over-confident* — the tails are where postseason probability lives. Wiring park and
-weather into the engine as game-level multipliers is the first thing to do before
-trusting simulated World Series odds, and both data sources are already built.
+*over-confident* — the tails are where postseason probability lives.
+
+### Park and weather wired in — and a correction
+
+Park (`gd_park_factor`) and weather (`gd_weather_factor`) now compose into a single
+per-game run multiplier that both teams share, converted into outcome-rate
+multipliers by `src/simulation/context.py`.
+
+Two design choices worth stating. The **direction** — which outcomes a richer
+environment moves — is measured, not assumed (`gd_run_env_direction`): triples move
+most (+0.20 in log rate), then home runs (+0.15) and doubles (+0.11), while
+strikeouts fall (−0.06). An assumed direction such as "scale all hits equally" would
+give the right mean with the wrong distribution shape, which defeats the purpose. The
+**magnitude** is calibrated by solving against the same analytic Markov solve used to
+validate the transition matrix, so asking for 1.27× runs delivers 1.27× runs to three
+decimals rather than approximately.
+
+| | No context | With context | Actual |
+|---|---|---|---|
+| Runs/team mean | 4.513 | 4.533 | 4.447 |
+| **Runs/team sd** | 3.004 | **3.051** | **3.246** |
+| Shutouts | 11.1% | 11.4% | 13.6% |
+| 11+ run games | 4.08% | 4.27% | 5.23% |
+
+**The correction: this was predicted to close the dispersion gap and it does not.**
+Park × weather explains only **1.6% of between-game run variance** (r = +0.127 against
+actual game totals). The implied ceiling on team-run sd is about +0.03; the measured
+gain is +0.05, so the approach is already exhausted rather than under-exploited.
+Roughly a quarter of the shortfall is closed and the remaining three quarters are not
+park or weather.
+
+The wiring is still right — it is physically real, correctly calibrated, and the
+engine should price Coors differently from T-Mobile. But anyone chasing dispersion
+should look elsewhere: day-to-day variation in a pitcher's true form, and correlated
+outcomes within a game (a pitcher losing command for an inning), are where the
+remaining variance lives. Both are random effects rather than observable covariates,
+so they need a different mechanism — overdispersion in the PA model — not another
+lookup table.
 
 ## Evaluation
 
