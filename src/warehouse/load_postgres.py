@@ -51,9 +51,36 @@ app = typer.Typer(add_completion=False, help="Publish modeled tables to Postgres
 # Savepoint-Lab runs a single `sports` database shared with the other verticals.
 # The layer survives in the table name's `sv_` / `gd_` prefix, so nothing is lost by
 # flattening, and `baseball.sv_games` cannot collide with `tennis.silver_matches`.
+# The dividing line is "would a dashboard, a report, or a BI user query this?" --
+# not "is it derived?". Three kinds of table are deliberately absent:
+#
+#   * **Plate-appearance detail.** sv_plate_appearances and sv_lineup_slots are 2.1M
+#     rows each of pitch-derived state. They are the simulation engine's raw material,
+#     they are close enough to the Statcast feed that they belong in the lake on
+#     licensing grounds (CLAUDE.md section 4), and no dashboard joins them.
+#   * **Engine internals.** gd_base_transitions, gd_run_env_direction and
+#     gd_pitcher_form_direction are calibration inputs the simulator reads. Publishing
+#     them would invite someone to treat a probability lookup as an analytical fact.
+#   * **Intermediate components.** sv_statcast_bullpen_game exists to build
+#     gd_bullpen_form; the rolled-up version is the one worth serving.
+#
+# Everything else that a person might reasonably ask a question of is published.
 PUBLISHED: dict[str, tuple[str, ...]] = {
-    "silver": ("sv_games",),
-    "gold": ("gd_team_season_record",),
+    "silver": (
+        "sv_games",
+        "sv_statcast_team_game",
+        "sv_statcast_pitcher_game",
+    ),
+    "gold": (
+        "gd_team_season_record",
+        "gd_run_expectancy",
+        "gd_park_factor",
+        "gd_weather_factor",
+        "gd_team_form",
+        "gd_starter_form",
+        "gd_bullpen_form",
+        "gd_pitcher_removal",
+    ),
 }
 
 
