@@ -506,6 +506,60 @@ matched the target while claiming pitchers vary far more than the evidence suppo
 and every simulated game would have inherited that claim. The effect goes in at its
 measured size and the shortfall is reported.
 
+### Five more mechanisms, all measured
+
+Following the "not a game-level covariate" finding, three mechanisms were tried that
+depend on the game *as it unfolds* (so were outside that ceiling), plus a matchup term.
+
+**Leverage-aware bullpen.** Managers pick relievers by the score: .3121 on-base
+allowed by arms summoned in close games against .3261 in blowouts. `Bullpen` now
+solves an exponential tilt on usage weights per team to reproduce that, so the engine
+inherits aggregate managerial behaviour rather than a hand-written closer rule. The
+feedback story — a lead brings in worse pitching, which extends the lead — was
+plausible and **does not survive**: team-run sd 3.073 → 3.071 against a Monte-Carlo
+se of 0.004. By the time a game is a blowout there are too few innings left to
+compound.
+
+**Within-game fade.** Real once its confounds are removed. Raw numbers show pitchers
+*improving* as an outing lengthens, because within a time through the order "batters
+faced" tracks lineup position. Netting out the batter's and pitcher's own season rates
+leaves a monotone slide of −0.0003 → +0.0117 in on-base allowed. It must be **centred**
+on a PA-weighted zero: the PA model's pitcher rates are season averages that already
+contain his tired innings, so an uncentred fade counts fatigue twice and added +0.05
+runs per team-game. Centred, it improves the mean (4.549 → 4.503 vs 4.447 actual) and
+leaves dispersion flat (3.057).
+
+**Batter × pitch family.** Fastball / breaking / offspeed profiles per batter,
+weighted by the pitcher's mix. Persistence is weak but non-zero — year-over-year
+r ≈ +0.16 fastball, +0.15 offspeed, **+0.04 breaking** (noise). Held-out on 155,912
+plate appearances from 2026 with profiles fit on 2023-2025, it makes prediction
+**significantly worse**: log-loss 0.627262 → 0.627321, paired t = **−2.77**. Scanning
+the weight, held-out loss rises monotonically from zero, so the optimal weight is
+**0**. The adjustment correlates +0.006 with reaching base in-sample and **−0.003 out
+of sample** — the sign does not survive.
+
+It is not wired into the engine, and `tests/test_pitch_matchup.py` asserts that it
+stays out. The marts are kept: "this hitter's on-base drops against offspeed" is a
+legitimate scouting observation even though it does not predict a plate appearance.
+The likely reason it fails is absorption — a slider-heavy pitcher's slider
+effectiveness is already inside his season rate, and the leftover interaction is too
+small to survive noise.
+
+### Running tally on the dispersion gap
+
+| Mechanism | Share of the gap |
+|---|---|
+| Park × weather | ~12% |
+| Day-to-day pitcher form | ~5% |
+| Team defence | ~5% |
+| Leverage-aware bullpen | ~0% |
+| Within-game fade | ~0% |
+| Batter × pitch family | negative (not used) |
+
+Six mechanisms, none decisive. Everything knowable before first pitch is capped at
+~13% of the gap, and the two in-game feedback candidates came in flat. What remains
+is within-inning sequencing, which no per-game or per-matchup quantity can express.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).

@@ -66,6 +66,16 @@ pa as (
         p.on_3b is not null                        as b3_before,
         coalesce(r.runs_in_pa, 0)                  as runs_on_play,
         p.events,
+        -- Pitch family of the pitch that ENDED the plate appearance. Grouped into
+        -- three families rather than kept as 18 raw types: 4,181 batter x pitch-type
+        -- pairs have under 20 plate appearances in a season, so the raw grain is
+        -- almost entirely noise. Families are the standard split and keep enough
+        -- sample per batter to estimate anything.
+        case
+            when p.pitch_type in ('FF', 'SI', 'FC', 'FA') then 'fastball'
+            when p.pitch_type in ('SL', 'ST', 'CU', 'KC', 'SV', 'CS', 'SC') then 'breaking'
+            when p.pitch_type in ('CH', 'FS', 'FO', 'EP') then 'offspeed'
+        end                                        as pitch_family,
         case
             when p.events in ('strikeout', 'strikeout_double_play')          then 'K'
             when p.events in ('walk', 'intent_walk')                          then 'BB'
@@ -115,6 +125,7 @@ select
     b3_before,
     outcome,
     events,
+    pitch_family,
     runs_on_play,
     next_outs is null                              as ends_half_inning,
     coalesce(next_outs, 3)                         as outs_after,
