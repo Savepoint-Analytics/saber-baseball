@@ -560,6 +560,59 @@ Six mechanisms, none decisive. Everything knowable before first pitch is capped 
 ~13% of the gap, and the two in-game feedback candidates came in flat. What remains
 is within-inning sequencing, which no per-game or per-matchup quantity can express.
 
+### Simulator versus classifier, scored on the same metric (2026)
+
+The engine had been validated on what it *describes* — run scoring, home-field
+advantage, starter workloads, score distributions — but never on what the classifiers
+are judged by. Two model families, one metric, 2,057 held-out 2026 games with the PA
+model fitted on 2023-2025 (`python -m src.models.evaluate_simulator`).
+
+| Model | Log-loss | AUC | Accuracy |
+|---|---|---|---|
+| **Elo + starter form (logistic)** | **0.68526** | **0.5651** | 0.562 |
+| Elo + starter + team form | 0.68573 | 0.5625 | 0.555 |
+| Pythagorean | 0.68608 | 0.5587 | 0.547 |
+| Elo | 0.68620 | 0.5578 | 0.552 |
+| Statcast GBM | 0.68747 | 0.5549 | 0.548 |
+| **Simulator (PA-level Monte Carlo)** | **0.68890** | **0.5440** | 0.530 |
+| Home-field constant | 0.69170 | 0.5247 | 0.527 |
+
+**The simulator is the worst real model.** It beats only the constant. The paired
+per-game test against the best classifier is +1.24 (not significant on one season),
+but the ranking is unambiguous and the AUC gap is the story.
+
+**It is a discrimination failure, not a calibration one.** Recentring each model's
+log-odds so its mean matches the true base rate moves the simulator only 0.68890 →
+0.68877. Its AUC of 0.5440 is genuinely below Elo's 0.5578 — it ranks games worse,
+and no amount of level correction fixes that.
+
+**Why is instructive.** Elo is *outcome-based*: it learns from results, so it silently
+absorbs everything we have not modelled — team defence, baserunning, coaching,
+bullpen management, whatever else. The simulator is *mechanism-based* and knows only
+what was explicitly built into it. Team defence is a case in point: measured at 2.8x
+binomial variance and repeating year over year at r = +0.52 to +0.64, yet every one of
+the 30 teams is league-average inside the engine. Elo gets that for free; the
+simulator cannot.
+
+**But the two are not redundant.** Their predictions correlate only **+0.61**, and
+blending them in log-odds space improves on the classifier alone, optimally at ~30%
+weight on the simulator (0.68526 → 0.68448). That gain is *not* significant
+(t = +0.88) and the weight was chosen on the test season, so it needs a walk-forward
+fit before it can be claimed — but a smooth interior optimum at 0.30 is what genuine
+complementary information looks like.
+
+**What this means for the roadmap.** Use the classifier family for win probability.
+Keep the simulator for what only it can produce — final-score distributions, playoff
+and World Series odds, counterfactuals — none of which a binary classifier can express
+at any accuracy. And carry the caveat forward: simulated playoff odds inherit both the
+~6% under-dispersion and this discrimination deficit, so they should be presented as
+illustrative until the blend is properly validated.
+
+Leakage note: the PA model is fitted on training seasons only, but structural inputs
+(transition matrix, removal policy, weather factors) remain era-pooled and touch the
+test season. They are physical constants rather than strength estimates, so the effect
+is small — and it favours the simulator, which lost anyway.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).
