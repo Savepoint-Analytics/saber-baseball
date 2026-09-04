@@ -40,6 +40,15 @@ select
     cast(away_team_id as integer)                    as away_team_id,
     away_team,
     cast(venue_id as integer)                        as venue_id,
+    -- Announced starters. The whole point of a *schedule* model is that it describes
+    -- games that have not happened, and for those the probable pitcher is the only
+    -- starter information that exists — sv_statcast_pitcher_game cannot know who
+    -- started a game nobody has played.
+    cast(home_probable_pitcher_id as bigint)         as home_probable_pitcher_id,
+    cast(away_probable_pitcher_id as bigint)         as away_probable_pitcher_id,
+    weather_condition,
+    try_cast(weather_temp as integer)                as weather_temp_f,
+    weather_wind,
     cast(home_score as integer)                      as home_score,
     cast(away_score as integer)                      as away_score,
     status in ('Final', 'Completed Early')           as is_played,

@@ -35,11 +35,18 @@ _SEASON_START = "{year}-03-01"
 _SEASON_END = "{year}-11-30"
 
 
-def _fetch_schedule(start: str, end: str, sport_id: int = 1) -> pd.DataFrame:
-    """Fetch the schedule for a date range and flatten games to one row each."""
+def _fetch_schedule(start: str, end: str, sport_id: int = 1, force: bool = False) -> pd.DataFrame:
+    """Fetch the schedule for a date range and flatten games to one row each.
+
+    ``force`` bypasses the on-disk cache. The cache exists to be a good citizen of
+    upstream and its TTL is a week, which is right for backfilling history and wrong
+    for a daily run: tonight's prediction built from a seven-day-old schedule would
+    silently miss today's games and today's probable pitchers.
+    """
     payload = cached_get(
         SCHEDULE_URL,
         source="statsapi",
+        force=force,
         params={
             "sportId": sport_id,
             "startDate": start,
@@ -104,10 +111,10 @@ def season_window(season: int) -> tuple[str, str]:
     return _SEASON_START.format(year=season), _SEASON_END.format(year=season)
 
 
-def ingest(start: str, end: str) -> str:
+def ingest(start: str, end: str, force: bool = False) -> str:
     """Pull the schedule for [start, end] and land it as Parquet in bronze."""
-    logger.info("StatsAPI: schedule {} -> {}", start, end)
-    df = _fetch_schedule(start, end)
+    logger.info("StatsAPI: schedule {} -> {}{}", start, end, " (forced)" if force else "")
+    df = _fetch_schedule(start, end, force=force)
     season = start[:4]
     key = bronze_key("statsapi", f"season={season}", f"schedule_{start}_{end}.parquet")
     return write_parquet(df, key, sources=[Source.MLB_STATS_API])
@@ -150,6 +157,7 @@ def main(
     ),
     start: str = typer.Option(None, "--start", help="YYYY-MM-DD inclusive."),
     end: str = typer.Option(None, "--end", help="YYYY-MM-DD inclusive."),
+    force: bool = typer.Option(False, "--force", help="Bypass the HTTP cache."),
 ) -> None:
     if start_season:
         keys = backfill(start_season, end_season or date.today().year)
@@ -159,7 +167,7 @@ def main(
         start, end = season_window(season)
     elif not (start and end):
         raise typer.BadParameter("Provide --season, --start-season, OR both --start and --end.")
-    key = ingest(start, end)
+    key = ingest(start, end, force=force)
     logger.success("StatsAPI ingest complete -> {}", key)
 
 

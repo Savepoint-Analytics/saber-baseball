@@ -29,6 +29,25 @@ def bronze_key(dataset: str, *parts: str) -> str:
     return f"{root}{sep}{suffix}"
 
 
+def bronze_exists(key: str) -> bool:
+    """Does this bronze object already exist, on either backend?
+
+    ``Path(key).exists()`` silently returns False for an ``s3://`` URI, so a
+    resumable backfill that used it re-pulled everything the moment the backend
+    switched to MinIO -- hours of rate-limited requests to re-fetch data already in
+    the bucket, with no error to indicate anything was wrong.
+    """
+    if not key.startswith("s3://"):
+        return Path(key).exists()
+    import s3fs
+
+    options = settings.s3_storage_options()
+    fs = s3fs.S3FileSystem(
+        key=options["key"], secret=options["secret"], client_kwargs=options["client_kwargs"]
+    )
+    return bool(fs.exists(key.removeprefix("s3://")))
+
+
 def write_parquet(df: pd.DataFrame, key: str, *, sources: list[Source]) -> str:
     """Write a DataFrame to Parquet at ``key`` (local path or ``s3://...``).
 

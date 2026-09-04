@@ -16,7 +16,6 @@ Run::
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 import pandas as pd
 import typer
@@ -24,7 +23,7 @@ from loguru import logger
 
 from src.compliance.attributions import Source
 from src.config import settings
-from src.ingestion._storage import bronze_duckdb, bronze_key, write_parquet
+from src.ingestion._storage import bronze_duckdb, bronze_exists, bronze_key, write_parquet
 from src.ingestion._throttle import (
     enable_pybaseball_cache,
     get_limiter,
@@ -130,7 +129,7 @@ def backfill(start_season: int, end_season: int, *, skip_existing: bool = True) 
     failed: list[str] = []
     for i, day in enumerate(days, 1):
         key = _partition_key(day)
-        if skip_existing and Path(key).exists():
+        if skip_existing and bronze_exists(key):
             skipped += 1
             continue
         try:
