@@ -377,14 +377,24 @@ class BradleyTerryRidge:
     name: str = "bradley_terry"
     half_life_days: float = 365.0
     C: float = 1.0
+    # Days between refits while predicting. Elo updates after every game; a batch fit
+    # that never refits holds one rating from opening day to game 162 and cannot react
+    # to a June trade. Measured, that handicap alone cost 0.006 log-loss -- more than
+    # any feature this project has added. 0 disables refitting.
+    refit_every_days: int = 7
     ratings: dict[int, float] = field(default_factory=dict)
     home_advantage: float = 0.0
+    _history: pd.DataFrame | None = field(default=None, repr=False)
 
     def fit(self, games: pd.DataFrame) -> BradleyTerryRidge:
+        _check_columns(games)
+        self._history = games.dropna(subset=["home_win"]).copy()
+        self._fit_ratings(self._history)
+        return self
+
+    def _fit_ratings(self, played: pd.DataFrame) -> None:
         from sklearn.linear_model import LogisticRegression
 
-        _check_columns(games)
-        played = games.dropna(subset=["home_win"])
         teams = sorted(
             set(played["home_team_id"].astype(int)) | set(played["away_team_id"].astype(int))
         )
@@ -409,10 +419,152 @@ class BradleyTerryRidge:
         coefs = coefs - coefs.mean()
         self.ratings = {int(t): float(coefs[i]) for t, i in index.items()}
         self.home_advantage = float(model.intercept_[0])
-        return self
 
-    def predict_proba(self, games: pd.DataFrame) -> np.ndarray:
-        _check_columns(games)
+    def _probabilities(self, games: pd.DataFrame) -> np.ndarray:
         home = np.array([self.ratings.get(int(t), 0.0) for t in games["home_team_id"]])
         away = np.array([self.ratings.get(int(t), 0.0) for t in games["away_team_id"]])
         return np.asarray(_expit(home - away + self.home_advantage), dtype=float)
+
+    def predict_proba(self, games: pd.DataFrame) -> np.ndarray:
+        """Predict, refitting periodically on everything already played.
+
+        Walks the games in date order and refits every ``refit_every_days`` on the
+        training history plus the test games that have already happened. Each game is
+        predicted *before* being added, so this stays causal — the same discipline
+        Elo's walk uses.
+        """
+        _check_columns(games)
+        if not self.refit_every_days or self._history is None:
+            return self._probabilities(games)
+
+        ordered = games.sort_values(["game_date", "game_pk"], kind="stable")
+        dates = pd.to_datetime(ordered["game_date"])
+        out = np.empty(len(ordered), dtype=float)
+
+        history = self._history
+        last_refit: pd.Timestamp | None = None
+        start = 0
+        for end in range(1, len(ordered) + 1):
+            boundary = end == len(ordered) or (
+                last_refit is not None
+                and (dates.iloc[end] - last_refit).days >= self.refit_every_days
+            )
+            if last_refit is None:
+                last_refit = dates.iloc[0]
+                boundary = False
+            if not boundary:
+                continue
+
+            chunk = ordered.iloc[start:end]
+            out[start:end] = self._probabilities(chunk)
+            played = chunk.dropna(subset=["home_win"])
+            if len(played):
+                history = pd.concat([history, played], ignore_index=True)
+                self._fit_ratings(history)
+            last_refit = dates.iloc[end - 1]
+            start = end
+
+        return pd.Series(out, index=ordered.index).reindex(games.index).to_numpy()
+
+
+@dataclass
+class GlickoRating:
+    """Elo with an explicit uncertainty on every rating (Glicko).
+
+    Elo moves each rating by a fixed ``k`` regardless of how much is already known
+    about the team. That is the wrong amount twice over: too slow for a club we have
+    barely seen, too fast for one with a settled 100-game record. Glicko carries a
+    *rating deviation* (RD) alongside each rating and scales the update by it, so
+    uncertain ratings move quickly and confident ones resist.
+
+    Two places that matters in baseball. Early April, when last season's rating is
+    stale and this season's evidence is thin — RD has grown over the winter, so the
+    model updates fast. And after a deadline trade, where the club is genuinely a
+    different team but Elo would need weeks of results to notice.
+
+    RD also widens with idle time (``rd_growth_per_day``), which is what encodes "we
+    know less about them than we did in September".
+
+    Implemented as sequential per-game updates rather than batched rating periods:
+    baseball plays nearly every day, so a period *is* a game, and it keeps the walk
+    causal in the same way Elo's does.
+    """
+
+    name: str = "glicko"
+    initial_rating: float = 1500.0
+    initial_rd: float = 200.0
+    min_rd: float = 25.0  # tuned on 2018-19 only; see docs/methodology.md
+    max_rd: float = 250.0
+    rd_growth_per_day: float = 1.5
+    home_adv: float = 24.0
+    ratings: dict[int, float] = field(default_factory=dict)
+    deviations: dict[int, float] = field(default_factory=dict)
+    _last_seen: dict[int, pd.Timestamp] = field(default_factory=dict, repr=False)
+
+    _Q = np.log(10.0) / 400.0
+
+    def _g(self, rd: float) -> float:
+        """Damping factor: an uncertain opponent makes a result less informative."""
+        return 1.0 / np.sqrt(1.0 + 3.0 * self._Q**2 * rd**2 / np.pi**2)
+
+    def _state(self, team: int, when: pd.Timestamp) -> tuple[float, float]:
+        rating = self.ratings.setdefault(team, self.initial_rating)
+        rd = self.deviations.setdefault(team, self.initial_rd)
+        last = self._last_seen.get(team)
+        if last is not None:
+            idle = max((when - last).days, 0)
+            rd = min(np.sqrt(rd**2 + (self.rd_growth_per_day**2) * idle), self.max_rd)
+        return rating, float(rd)
+
+    def _walk(self, games: pd.DataFrame, collect: bool) -> np.ndarray:
+        sort_key = ["game_date"] + (["game_pk"] if "game_pk" in games.columns else [])
+        ordered = games.sort_values(sort_key, kind="stable")
+        dates = pd.to_datetime(ordered["game_date"])
+        preds = np.empty(len(ordered), dtype=float)
+
+        for i, row in enumerate(ordered.itertuples(index=False)):
+            when = dates.iloc[i]
+            home, away = int(row.home_team_id), int(row.away_team_id)
+            r_h, rd_h = self._state(home, when)
+            r_a, rd_a = self._state(away, when)
+
+            # Each side's expectation is damped by the *opponent's* uncertainty.
+            g_a, g_h = self._g(rd_a), self._g(rd_h)
+            e_h = 1.0 / (1.0 + 10 ** (-g_a * (r_h + self.home_adv - r_a) / 400.0))
+            e_a = 1.0 / (1.0 + 10 ** (-g_h * (r_a - r_h - self.home_adv) / 400.0))
+            preds[i] = e_h
+
+            if pd.isna(row.home_win):
+                continue
+            outcome = float(row.home_win)
+
+            for team, rating, rd, g_opp, expected, score in (
+                (home, r_h, rd_h, g_a, e_h, outcome),
+                (away, r_a, rd_a, g_h, e_a, 1.0 - outcome),
+            ):
+                d_sq_inv = self._Q**2 * g_opp**2 * expected * (1.0 - expected)
+                denom = 1.0 / rd**2 + d_sq_inv
+                self.ratings[team] = rating + (self._Q / denom) * g_opp * (score - expected)
+                self.deviations[team] = float(
+                    np.clip(np.sqrt(1.0 / denom), self.min_rd, self.max_rd)
+                )
+                self._last_seen[team] = when
+
+        if not collect:
+            return np.empty(0)
+        return pd.Series(preds, index=ordered.index).reindex(games.index).to_numpy()
+
+    def fit(self, games: pd.DataFrame) -> GlickoRating:
+        _check_columns(games)
+        self.ratings, self.deviations, self._last_seen = {}, {}, {}
+        self._walk(games.dropna(subset=["home_win"]), collect=False)
+        return self
+
+    def predict_proba(self, games: pd.DataFrame) -> np.ndarray:
+        """Walk the window on a scratch copy so repeated calls are identical."""
+        _check_columns(games)
+        saved = (dict(self.ratings), dict(self.deviations), dict(self._last_seen))
+        try:
+            return self._walk(games, collect=True)
+        finally:
+            self.ratings, self.deviations, self._last_seen = saved

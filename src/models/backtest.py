@@ -30,10 +30,12 @@ from src.models.baselines import (
     Baseline,
     BradleyTerryRidge,
     EloBaseline,
+    GlickoRating,
     HomeFieldBaseline,
     Log5Baseline,
     PythagoreanBaseline,
 )
+from src.models.score_models import NegativeBinomialScoreModel, PoissonScoreModel
 from src.models.statcast import (
     EloContextLogistic,
     EloStarterBullpenContextLogistic,
@@ -57,7 +59,21 @@ MODELS: dict[str, Callable[[], Baseline]] = {
     "pythagorean": PythagoreanBaseline,
     "elo": EloBaseline,
     "bradley_terry": BradleyTerryRidge,
+    "glicko": GlickoRating,
+    "poisson_score": PoissonScoreModel,
+    "negbin_score": NegativeBinomialScoreModel,
 }
+
+
+# Opt-in only: the hierarchical model samples for about a minute per fold, which
+# would make every routine backtest run take ten. Import it explicitly when comparing
+# families rather than paying that cost on every call.
+def slow_models() -> dict[str, Callable[[], Baseline]]:
+    """Model families too slow for the default sweep."""
+    from src.models.hierarchical import HierarchicalBradleyTerry
+
+    return {"hierarchical_bt": HierarchicalBradleyTerry}
+
 
 # Kept separate because these require Statcast form columns; MODELS must stay usable
 # on a bare spine so the baselines can be run without the pitch-level layer built.

@@ -654,6 +654,58 @@ The fair version needs in-season refitting — periodic refit, or an online upda
 top of the batch fit. Until that exists the number above understates the family
 rather than measuring it, and it is recorded that way.
 
+### Four more model families, worked through (2026-09-04)
+
+All fitted walk-forward on 2018-2026, 2020/21 folds excluded, same protocol as
+everything else.
+
+| Model | Log-loss | Notes |
+|---|---|---|
+| **Elo** | **0.6781** | still the bar |
+| Glicko | 0.6788 | `min_rd` tuned on 2018-19 only |
+| Bradley-Terry (refit every 7d) | 0.6794 | |
+| Pythagorean | 0.6812 | |
+| Hierarchical Bayes (static) | 0.6832 | fair comparator is static BT |
+| Negative-binomial score | 0.6833 | |
+| Bradley-Terry (static) | 0.6843 | |
+| Poisson score | 0.6909 | |
+| Home-field constant | 0.6915 | |
+
+**Elo survives all four challengers.** What each attempt taught:
+
+**Bradley-Terry.** The first fit lost badly (0.6843) and the diagnosis was structural,
+not tuning — log-loss was flat across half-lives from 120 to 730 days. Elo updates
+*during* the season; a batch fit holds one rating from opening day to game 162. Adding
+in-season refitting recovered almost all of it: **0.6843 → 0.6794**. That 0.005 is
+larger than any feature this project has added, and it is a property of *when* a model
+learns rather than *what* it knows.
+
+**Glicko.** Carries a rating deviation so uncertain ratings move faster. Tuned
+honestly (`min_rd` chosen on 2018-19, reported on 2022-26) it reaches 0.6788 against
+Elo's 0.6781 — close, not ahead. The likely reason it does not pay: Glicko's advantage
+is sparse, irregular schedules, and every MLB club plays 162 games with no idle gaps,
+so rating uncertainty is near-uniform across the league.
+
+**Score models.** Predict runs, integrate to a win. The negative binomial beats the
+Poisson by **0.0076** — a larger gap than most differences in this project — because
+run scoring is genuinely overdispersed: the fitted parameter implies variance **2.2x
+Poisson**. That is the same clustering six covariate experiments failed to explain in
+the simulator, here simply estimated rather than fought. Both still lose to the rating
+models at predicting *wins*, which is unsurprising: they reach a binary outcome
+through an extra modelling layer. Their value is the **score distribution**, a product
+previously available only from the plate-appearance simulator at far higher cost.
+
+**Hierarchical Bayes.** Learns the pooling strength rather than taking a ridge penalty
+on faith. Against its fair comparator — static Bradley-Terry, since sampling at ~1
+minute per fit rules out in-season refitting — it wins: **0.6832 against 0.6843**.
+Partial pooling helps, modestly, which is what the variance-limited diagnosis
+predicted. Registered under `slow_models()` rather than the default sweep so a routine
+backtest does not take ten minutes.
+
+**The open thread.** Refitting was worth ~0.005 to Bradley-Terry, and the hierarchical
+model is static. A hierarchical fit with variational refits would plausibly land near
+0.678 and is the one remaining candidate with a credible path past Elo.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).
