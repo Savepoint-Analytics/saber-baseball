@@ -209,3 +209,92 @@ class PitcherForm:
             return np.ones((size, len(OUTCOMES)))
         z = rng.normal(0.0, self.sigma, size=size) + self.offset
         return np.exp(z[:, None] * self.direction[None, :])
+
+
+@dataclass
+class PitcherFade:
+    """Deterministic decline as a pitcher's outing lengthens.
+
+    Distinct from :class:`PitcherForm`, which is the random draw for *what kind of
+    night* this is. Fade is the systematic part: the same pitcher, having the same
+    night, is worse at his 22nd batter than his 2nd.
+
+    Measuring it needs care because two large confounds point the opposite way. Within
+    a time through the order, batters faced tracks *lineup position* -- the first
+    batter a starter sees is the leadoff hitter and the ninth is the worst in the
+    order -- so a raw comparison shows pitchers apparently improving as they go. And
+    better pitchers last longer, so deep bands over-represent good arms.
+    ``gd_pitcher_fade`` nets both out; what survives is a monotone slide from -0.0003
+    to +0.0117 in on-base allowed.
+
+    The direction is borrowed from :class:`PitcherForm`: a tiring pitcher and a
+    pitcher without his stuff look alike, both losing strikeouts and giving up
+    damage. Only the magnitude differs, and it is read off the measured table.
+    """
+
+    direction: np.ndarray
+    bands: np.ndarray
+    exponents: np.ndarray
+
+    @classmethod
+    def calibrate(cls, model: PAOutcomeModel, era: str = "2023-2026") -> PitcherFade:
+        con = _lake()
+        try:
+            df = con.sql(
+                f"select bf_band, residual_obr, plate_appearances "
+                f"from main_gold.gd_pitcher_fade where era = '{era}' order by bf_band"
+            ).df()
+        finally:
+            con.close()
+        if df.empty:
+            raise ValueError(f"No pitcher fade table for era {era!r}")
+
+        d = load_direction(era)
+        league = model.league_probabilities()
+        base_on_base = float(league[_ON_BASE_MASK].sum())
+
+        def on_base_at(exponent: float) -> float:
+            rates = league * np.exp(exponent * d)
+            return float((rates / rates.sum())[_ON_BASE_MASK].sum())
+
+        # Centre the fade on a plate-appearance-weighted zero. The PA model's pitcher
+        # rates are season averages that ALREADY contain his tired late innings, so an
+        # uncentred fade counts fatigue twice and raises league scoring -- measured at
+        # +0.05 runs per team-game before this correction. Fade must say "worse than
+        # his own average, late; better than it, early", not "worse, always".
+        residual = df.residual_obr.to_numpy(dtype=float)
+        weights = df.plate_appearances.to_numpy(dtype=float)
+        residual = residual - np.average(residual, weights=weights)
+
+        exponents = []
+        for target in residual:
+            want = base_on_base + target
+            lo, hi = -5.0, 5.0
+            for _ in range(60):
+                mid = 0.5 * (lo + hi)
+                if on_base_at(mid) < want:
+                    lo = mid
+                else:
+                    hi = mid
+            exponents.append(0.5 * (lo + hi))
+        return cls(
+            direction=d,
+            bands=df.bf_band.to_numpy(dtype=float),
+            exponents=np.array(exponents, dtype=float),
+        )
+
+    def multiplier(self, batters_faced: np.ndarray) -> np.ndarray:
+        """Outcome multipliers for each pitcher's current workload, shape ``(n, 9)``.
+
+        Interpolated between band midpoints and flat beyond the last one. Beyond ~30
+        batters the data thins to the point of being survivor-biased, so holding the
+        final value is more honest than extrapolating a trend into it.
+        """
+        e = np.interp(
+            np.asarray(batters_faced, dtype=float),
+            self.bands,
+            self.exponents,
+            left=float(self.exponents[0]),
+            right=float(self.exponents[-1]),
+        )
+        return np.exp(e[:, None] * self.direction[None, :])

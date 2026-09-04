@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from src.simulation.context import RunEnvironment
-from src.simulation.form import PitcherForm
+from src.simulation.form import PitcherFade, PitcherForm
 from src.simulation.lineup import (
     BF_BUCKETS,
     LINEUP_SIZE,
@@ -129,6 +129,8 @@ class GameSimulator:
     # other. Drawing it per plate appearance would add variance without adding
     # correlation -- the opposite of the point.
     pitcher_form: PitcherForm | None = None
+    # Systematic decline as an outing lengthens, distinct from the random draw above.
+    pitcher_fade: PitcherFade | None = None
     ghost_runner_from_inning: int | None = 10
     max_innings: int = 30
     _hazard: np.ndarray = field(init=False)
@@ -244,6 +246,11 @@ class GameSimulator:
                         * env_mult
                         * form[fielding][idx]
                     )
+                    # Systematic decline as the outing lengthens, applied on the
+                    # workload *before* this batter so a pitcher is never charged
+                    # for fatigue he has not yet accumulated.
+                    if self.pitcher_fade is not None:
+                        raw = raw * self.pitcher_fade.multiplier(pitcher_bf[fielding][idx])
                     probs = raw / raw.sum(axis=1, keepdims=True)
                     outcome = (probs.cumsum(axis=1) < rng.random((k, 1))).sum(axis=1)
                     outcome = np.minimum(outcome, len(OUTCOMES) - 1)
@@ -269,8 +276,21 @@ class GameSimulator:
 
                     if remove.any():
                         replaced = idx[remove]
+                        # Managers choose by the score; the engine must too, or a
+                        # lead never brings in the worse pitching that extends it.
+                        margins = np.abs(
+                            score[HOME][replaced].astype(int) - score[AWAY][replaced].astype(int)
+                        )
                         self._replace_pitchers(
-                            rng, replaced, fielding, pitcher, pitcher_bf, used, weights
+                            rng,
+                            replaced,
+                            fielding,
+                            pitcher,
+                            pitcher_bf,
+                            used,
+                            weights,
+                            setups[fielding].bullpen,
+                            margins,
                         )
                         # A fresh arm gets a fresh night.
                         form[fielding][replaced] = self._draw_form(rng, len(replaced))
@@ -302,6 +322,8 @@ class GameSimulator:
         pitcher_bf: list[np.ndarray],
         used: list[np.ndarray],
         weights: list[np.ndarray],
+        bullpen: Bullpen | None = None,
+        margins: np.ndarray | None = None,
     ) -> None:
         """Draw a fresh reliever for each simulation in ``rows``.
 
@@ -317,8 +339,15 @@ class GameSimulator:
             w[exhausted] = weights[team]
             w[exhausted, 0] = 0.0
 
+        # Tilt toward the good or bad end of the staff according to the score in each
+        # simulation. Index 0 of the pool is the starter, who is never available.
+        if bullpen is not None and margins is not None and bullpen.quality is not None:
+            tilts = np.array([bullpen.tilt_for(int(m)) for m in margins])
+            q = np.concatenate(([bullpen.quality.mean()], bullpen.quality))
+            w = w * np.exp(-tilts[:, None] * (q[None, :] - bullpen.quality.mean()))
+
         with np.errstate(divide="ignore"):
-            keys = np.log(w) + rng.gumbel(size=w.shape)
+            keys = np.log(np.maximum(w, 0.0)) + rng.gumbel(size=w.shape)
         choice = keys.argmax(axis=1)
 
         pitcher[team][rows] = choice

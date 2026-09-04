@@ -126,3 +126,53 @@ def test_sampling_the_policy_reproduces_real_starter_workload():
         lengths.append(bf)
     mean = float(np.mean(lengths))
     assert 19.5 < mean < 24.0, f"simulated starters face {mean:.1f} batters"
+
+
+# --- leverage-aware bullpen ------------------------------------------------
+def test_leverage_band_boundaries():
+    from src.simulation.lineup import leverage_band
+
+    assert leverage_band(0) == "close"
+    assert leverage_band(2) == "close"
+    assert leverage_band(3) == "medium"
+    assert leverage_band(5) == "medium"
+    assert leverage_band(6) == "blowout"
+
+
+def test_bullpen_without_quality_ignores_margin():
+    """Backwards compatibility: a staff with no quality data draws by usage alone."""
+    rng = np.random.default_rng(0)
+    bp = Bullpen(1, np.array([10, 11]), np.array([1.0, 1.0]))
+    assert bp.tilt_for(0) == 0.0
+    assert bp.draw(rng, margin=9) in (10, 11)
+
+
+def test_tilt_favours_better_relievers_in_close_games():
+    """Lower on-base allowed is better, so a close-game target must prefer it."""
+    quality = np.array([0.28, 0.31, 0.36])  # good, average, poor
+    bp = Bullpen(
+        1,
+        np.array([10, 11, 12]),
+        np.ones(3),
+        quality=quality,
+        targets={"close": 0.29, "medium": 0.315, "blowout": 0.34},
+    )
+    assert bp.tilt_for(1) > bp.tilt_for(8), "close games should tilt harder toward quality"
+
+    rng = np.random.default_rng(1)
+    close = [bp.draw(rng, margin=1) for _ in range(3000)]
+    blowout = [bp.draw(rng, margin=9) for _ in range(3000)]
+    q = dict(zip([10, 11, 12], quality, strict=True))
+    assert np.mean([q[p] for p in close]) < np.mean([q[p] for p in blowout])
+
+
+def test_tilt_gives_up_rather_than_distorting_an_impossible_target():
+    """A target outside the staff's range must not collapse it onto one arm."""
+    bp = Bullpen(
+        1,
+        np.array([10, 11]),
+        np.ones(2),
+        quality=np.array([0.30, 0.32]),
+        targets={"close": 0.10},  # unreachable
+    )
+    assert bp.tilt_for(1) == 0.0

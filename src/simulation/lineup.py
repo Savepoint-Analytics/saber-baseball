@@ -114,22 +114,86 @@ class SubstitutionPolicy:
         return bool(rng.random() < self.removal_probability(is_starter, tto, batters_faced))
 
 
+# Score bands a manager effectively selects on, and the measured quality of the
+# reliever summoned in each (mean season on-base allowed, 2023-2026). Higher is worse.
+LEVERAGE_BANDS = ("close", "medium", "blowout")
+
+
+def leverage_band(margin: int) -> str:
+    """Score band a manager is effectively choosing within."""
+    if margin <= 2:
+        return "close"
+    return "medium" if margin <= 5 else "blowout"
+
+
 @dataclass
 class Bullpen:
-    """A team's relief options, weighted by how often they actually appeared."""
+    """A team's relief options, weighted by usage and by the score when summoned.
+
+    Managers do not pick relievers by availability alone. They pick by the score: the
+    best arm enters a one-run game, the mop-up man enters a 9-2 game. Measured across
+    2023-2026 that is .3121 on-base allowed in close games against .3261 in blowouts.
+
+    This matters more than its size suggests, because it is a *feedback* effect. A
+    lead brings in worse pitching, which extends the lead. Drawing by usage alone --
+    as this class originally did -- compresses both tails, producing a simulator with
+    too few blowouts *and* too few tight games.
+
+    ``quality`` is each reliever's season on-base allowed. When it and ``targets`` are
+    supplied the draw is tilted toward the good or bad end of the staff until the
+    expected quality of the pitcher chosen matches what managers actually do.
+    """
 
     team_id: int
     pitchers: np.ndarray
     weights: np.ndarray
+    quality: np.ndarray | None = None
+    targets: dict[str, float] | None = None
+    _tilts: dict[str, float] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         total = self.weights.sum()
         if total <= 0:
             raise ValueError(f"bullpen for team {self.team_id} has no usage weight")
         self.weights = self.weights / total
+        if self.quality is not None and self.targets is not None:
+            self._tilts = {b: self._solve_tilt(self.targets[b]) for b in self.targets}
 
-    def draw(self, rng: np.random.Generator, exclude: set[int] | None = None) -> int:
-        """Pick the next reliever, weighted by usage.
+    def _expected_quality(self, tilt: float) -> float:
+        assert self.quality is not None
+        w = self.weights * np.exp(-tilt * (self.quality - self.quality.mean()))
+        return float(np.dot(w, self.quality) / w.sum())
+
+    def _solve_tilt(self, target: float) -> float:
+        """Exponential tilt on usage weights that reproduces a target mean quality.
+
+        Positive tilt favours better relievers. Bounded rather than solved to
+        arbitrary precision: an extreme tilt would collapse the staff onto one arm,
+        which is a worse error than missing the target by a thousandth.
+        """
+        assert self.quality is not None
+        lo, hi = -50.0, 50.0
+        if self._expected_quality(lo) < target or self._expected_quality(hi) > target:
+            return 0.0  # target lies outside what this staff can express
+        for _ in range(60):
+            mid = 0.5 * (lo + hi)
+            if self._expected_quality(mid) > target:
+                lo = mid
+            else:
+                hi = mid
+        return 0.5 * (lo + hi)
+
+    def tilt_for(self, margin: int) -> float:
+        """Weight tilt for a score margin; 0 when leverage targets are unavailable."""
+        return self._tilts.get(leverage_band(margin), 0.0) if self._tilts else 0.0
+
+    def draw(
+        self,
+        rng: np.random.Generator,
+        exclude: set[int] | None = None,
+        margin: int | None = None,
+    ) -> int:
+        """Pick the next reliever, by usage and (when known) by the score.
 
         Excluding pitchers already used in the game matters: without it a simulated
         team will bring the same reliever back twice in one game, which inflates the
@@ -142,6 +206,9 @@ class Bullpen:
         if not mask.any():  # exhausted: allow reuse rather than fail mid-game
             mask = np.ones(len(self.pitchers), dtype=bool)
         w = self.weights[mask]
+        if margin is not None and self._tilts and self.quality is not None:
+            tilt = self._tilts.get(leverage_band(margin), 0.0)
+            w = w * np.exp(-tilt * (self.quality[mask] - self.quality.mean()))
         return int(rng.choice(self.pitchers[mask], p=w / w.sum()))
 
 
@@ -178,15 +245,37 @@ def load_lineups(season: int) -> dict[tuple[int, int], Lineup]:
     return out
 
 
-def load_bullpens(season: int, min_appearances: int = 3) -> dict[int, Bullpen]:
-    """Relief options per team for one season, weighted by appearances."""
+def load_leverage_targets(era: str = "2023-2026") -> dict[str, float]:
+    """Mean reliever quality managers summon in each score band."""
+    con = _lake()
+    try:
+        df = con.sql(
+            f"select leverage_band, mean_obr_allowed from main_gold.gd_reliever_leverage "
+            f"where era = '{era}'"
+        ).df()
+    finally:
+        con.close()
+    return {str(r.leverage_band): float(r.mean_obr_allowed) for r in df.itertuples()}
+
+
+def load_bullpens(
+    season: int, min_appearances: int = 3, era: str = "2023-2026"
+) -> dict[int, Bullpen]:
+    """Relief options per team, weighted by appearances and tilted by score band."""
     con = _lake()
     try:
         df = con.sql(
             f"""
-            select team_id, pitcher, count(*) as appearances
-            from main_silver.sv_statcast_pitcher_game
-            where not is_starter and season = {season} and season_phase = 'regular'
+            select g.team_id, g.pitcher, count(*) as appearances,
+                   any_value(q.obr) as quality
+            from main_silver.sv_statcast_pitcher_game g
+            join (
+                select pitcher, avg(case when outcome in ('K','OUT') then 0.0 else 1.0 end) as obr
+                from main_silver.sv_plate_appearances
+                where season = {season} and season_phase = 'regular'
+                group by 1 having count(*) >= 40
+            ) q on q.pitcher = g.pitcher
+            where not g.is_starter and g.season = {season} and g.season_phase = 'regular'
             group by 1, 2
             having count(*) >= {min_appearances}
             """
@@ -194,11 +283,14 @@ def load_bullpens(season: int, min_appearances: int = 3) -> dict[int, Bullpen]:
     finally:
         con.close()
 
+    targets = load_leverage_targets(era)
     return {
         int(team): Bullpen(
             team_id=int(team),
             pitchers=grp.pitcher.to_numpy(dtype=int),
             weights=grp.appearances.to_numpy(dtype=float),
+            quality=grp.quality.to_numpy(dtype=float),
+            targets=targets or None,
         )
         for team, grp in df.groupby("team_id")
     }

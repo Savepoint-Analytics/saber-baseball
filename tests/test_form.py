@@ -153,3 +153,44 @@ def test_engine_without_form_is_unaffected(calibrated):
     a = sim.simulate(setup, setup, n_sims=800, rng=np.random.default_rng(3))
     b = sim.simulate(setup, setup, n_sims=800, rng=np.random.default_rng(3))
     assert (a.home_score == b.home_score).all()
+
+
+# --- within-game fade -----------------------------------------------------
+@needs_lake
+def test_fade_is_monotone_in_workload():
+    """A pitcher deep in an outing must not come out ahead of a fresh one."""
+    from src.simulation.form import PitcherFade
+    from src.simulation.transitions import load_plate_appearances
+
+    model = PAOutcomeModel().fit(load_plate_appearances((2025,)))
+    fade = PitcherFade.calibrate(model)
+    assert list(fade.exponents) == sorted(fade.exponents)
+    assert fade.exponents[0] < 0 < fade.exponents[-1]
+
+
+@needs_lake
+def test_fade_is_centred_so_it_does_not_add_offense():
+    """The PA model's pitcher rates already contain his tired innings.
+
+    An uncentred fade counts fatigue twice and raised league scoring by +0.05 runs
+    per team-game before this was fixed. The exponents must straddle zero.
+    """
+    from src.simulation.form import PitcherFade
+    from src.simulation.transitions import load_plate_appearances
+
+    model = PAOutcomeModel().fit(load_plate_appearances((2025,)))
+    fade = PitcherFade.calibrate(model)
+    assert fade.exponents.min() < 0 and fade.exponents.max() > 0
+
+
+@needs_lake
+def test_fade_multiplier_shape_and_flat_extrapolation():
+    from src.simulation.form import PitcherFade
+    from src.simulation.transitions import load_plate_appearances
+
+    model = PAOutcomeModel().fit(load_plate_appearances((2025,)))
+    fade = PitcherFade.calibrate(model)
+    m = fade.multiplier(np.array([1, 15, 30, 60]))
+    assert m.shape == (4, len(OUTCOMES))
+    # Beyond the last band the data is survivor-biased; hold rather than extrapolate.
+    assert m[3] == pytest.approx(fade.multiplier(np.array([30]))[0])
