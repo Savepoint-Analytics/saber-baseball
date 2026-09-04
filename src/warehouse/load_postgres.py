@@ -101,6 +101,23 @@ def publish(dry_run: bool = False) -> dict[str, int]:
         raise FileNotFoundError(f"No DuckDB lake at {path}. Run `make dbt-duckdb` first.")
 
     con = duckdb.connect(str(path))
+
+    # Fail with the missing name rather than a raw catalog error from three frames
+    # down. A table listed in PUBLISHED but absent from the lake means dbt has not
+    # been run, or a model was renamed and this list was not updated -- both worth
+    # saying out loud.
+    present = {
+        f"{r[0]}.{r[1]}"
+        for r in con.sql("select schema_name, table_name from duckdb_tables()").fetchall()
+    }
+    wanted = {f"main_{layer}.{t}" for layer, tables in PUBLISHED.items() for t in tables}
+    missing = sorted(wanted - present)
+    if missing:
+        raise ValueError(
+            f"PUBLISHED lists {len(missing)} table(s) absent from the lake: {missing}. "
+            "Run `make dbt-duckdb`, or update PUBLISHED if a model was renamed."
+        )
+
     con.execute("INSTALL postgres; LOAD postgres;")
     con.execute(f"ATTACH '{settings.postgres_dsn}' AS pg (TYPE POSTGRES)")
     logger.info("attached postgres at {}:{}", settings.postgres_host, settings.postgres_port)

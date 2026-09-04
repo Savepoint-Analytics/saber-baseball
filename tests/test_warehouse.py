@@ -37,27 +37,52 @@ def test_schema_setting_prefers_the_cross_vertical_name(monkeypatch):
     assert Settings(_env_file=None).postgres_schema == "baseball"
 
 
+def _fake_lake(tmp_path):
+    """A DuckDB lake containing exactly the tables PUBLISHED expects."""
+    import duckdb
+
+    lake = tmp_path / "saber.duckdb"
+    con = duckdb.connect(str(lake))
+    for layer, tables in load_postgres.PUBLISHED.items():
+        con.execute(f"create schema if not exists main_{layer}")
+        for table in tables:
+            con.execute(f"create table main_{layer}.{table} as select 1 as x")
+    con.close()
+    return lake
+
+
+def test_publish_fails_loudly_when_a_published_table_is_missing(monkeypatch, tmp_path):
+    """A renamed model or an unbuilt lake should name the problem, not raise a catalog error."""
+    import duckdb
+
+    lake = tmp_path / "saber.duckdb"
+    con = duckdb.connect(str(lake))
+    con.execute("create schema main_silver; create schema main_gold")
+    con.close()
+
+    monkeypatch.setattr(load_postgres, "duckdb_path", lambda: lake)
+    with pytest.raises(ValueError, match="absent from the lake"):
+        load_postgres.publish(dry_run=True)
+
+
 def test_publish_targets_the_vertical_schema_not_bare_layer_schemas(monkeypatch, tmp_path):
     """Every vertical shares one `sports` DB, so marts must be schema-namespaced.
 
     Publishing to bare `silver`/`gold` would collide with the next vertical that
     did the same, which is the bug this test pins shut.
     """
-    import duckdb
-
-    lake = tmp_path / "saber.duckdb"
-    con = duckdb.connect(str(lake))
-    con.execute("create schema main_silver; create schema main_gold")
-    con.execute("create table main_silver.sv_games as select 1 as game_pk")
-    con.execute("create table main_gold.gd_team_season_record as select 1 as season")
-    con.close()
+    # Build the fixture FROM PUBLISHED so the two cannot drift apart. Hard-coding two
+    # tables here meant that expanding the published set broke this test for a reason
+    # that had nothing to do with what it asserts.
+    lake = _fake_lake(tmp_path)
 
     monkeypatch.setattr(load_postgres, "duckdb_path", lambda: lake)
     monkeypatch.setattr(load_postgres.settings, "postgres_schema", "baseball")
 
     counts = load_postgres.publish(dry_run=True)
 
-    assert set(counts) == {"baseball.sv_games", "baseball.gd_team_season_record"}
+    expected = {f"baseball.{t}" for tables in load_postgres.PUBLISHED.values() for t in tables}
+    assert set(counts) == expected
     assert not any(k.startswith(("silver.", "gold.")) for k in counts)
 
 
