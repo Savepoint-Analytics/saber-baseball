@@ -178,9 +178,10 @@ make dbt-duckdb                          # bronze → silver → gold
    model (odds-ratio), base-out transition matrix, lineups, substitution policy and
    home-field advantage. It reproduces league run scoring to within 1%, home-field
    advantage to 0.2pp, and 1-run game frequency to 0.4pp. Park and weather are wired
-   in as per-game run multipliers; the engine remains ~6% under-dispersed, and park
-   and weather provably cannot fix it (see `docs/methodology.md`). Next: Monte-Carlo
-   the schedule → playoff & World Series odds.
+   in as per-game run multipliers, and day-to-day pitcher form as a per-outing one.
+   The engine remains ~6% under-dispersed: park/weather supply ~25% of the gap and
+   pitcher form ~5%, both measured rather than tuned (see `docs/methodology.md`).
+   Next: Monte-Carlo the schedule → playoff & World Series odds.
 6. **Phase 5 — Counterfactuals:** perturb player rate inputs, re-simulate, surface
    improvement levers; package as affordable analysis products.
 

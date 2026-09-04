@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from src.simulation.context import RunEnvironment
+from src.simulation.form import PitcherForm
 from src.simulation.lineup import (
     BF_BUCKETS,
     LINEUP_SIZE,
@@ -123,6 +124,11 @@ class GameSimulator:
     # still runs on a lake without the context marts, and so the effect of adding it
     # can be measured against the same engine without.
     run_environment: RunEnvironment | None = None
+    # Day-to-day pitcher form. Drawn once per pitcher per simulated game and held for
+    # every batter he faces, which is what makes his innings correlate with each
+    # other. Drawing it per plate appearance would add variance without adding
+    # correlation -- the opposite of the point.
+    pitcher_form: PitcherForm | None = None
     ghost_runner_from_inning: int | None = 10
     max_innings: int = 30
     _hazard: np.ndarray = field(init=False)
@@ -198,6 +204,9 @@ class GameSimulator:
         for t in range(2):
             used[t][:, 0] = True  # the starter has been used
 
+        # What kind of night each starter is having, one roll per simulation.
+        form = [self._draw_form(rng, n_sims) for _ in range(2)]
+
         finished = np.zeros(n_sims, dtype=bool)
 
         for inning in range(1, self.max_innings + 1):
@@ -225,12 +234,16 @@ class GameSimulator:
                     slot = pa_index[batting][idx] % LINEUP_SIZE
                     p_idx = pitcher[fielding][idx]
                     raw = (
-                        bat_rates[batting][slot]
-                        * pit_rates[fielding][p_idx]
-                        * state_rates[state[idx]]
-                        * side_rates[batting]
-                        / lg3
-                    ) * env_mult
+                        (
+                            bat_rates[batting][slot]
+                            * pit_rates[fielding][p_idx]
+                            * state_rates[state[idx]]
+                            * side_rates[batting]
+                            / lg3
+                        )
+                        * env_mult
+                        * form[fielding][idx]
+                    )
                     probs = raw / raw.sum(axis=1, keepdims=True)
                     outcome = (probs.cumsum(axis=1) < rng.random((k, 1))).sum(axis=1)
                     outcome = np.minimum(outcome, len(OUTCOMES) - 1)
@@ -255,9 +268,12 @@ class GameSimulator:
                     remove = rng.random(k) < self._hazard[is_starter, tto, bucket]
 
                     if remove.any():
+                        replaced = idx[remove]
                         self._replace_pitchers(
-                            rng, idx[remove], fielding, pitcher, pitcher_bf, used, weights
+                            rng, replaced, fielding, pitcher, pitcher_bf, used, weights
                         )
+                        # A fresh arm gets a fresh night.
+                        form[fielding][replaced] = self._draw_form(rng, len(replaced))
 
                     active[idx] = next_state != TERMINAL_STATE
                     if half == HOME and inning >= REGULATION_INNINGS:
@@ -270,6 +286,12 @@ class GameSimulator:
                 break
 
         return GameResult(home_score=score[HOME], away_score=score[AWAY])
+
+    def _draw_form(self, rng: np.random.Generator, size: int) -> np.ndarray:
+        """Per-outing form multipliers, or neutral ones when form is not configured."""
+        if self.pitcher_form is None:
+            return np.ones((size, len(OUTCOMES)))
+        return self.pitcher_form.draw(rng, size)
 
     @staticmethod
     def _replace_pitchers(

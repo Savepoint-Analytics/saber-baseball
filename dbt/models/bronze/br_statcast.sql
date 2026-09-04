@@ -19,6 +19,8 @@ select
     cast(batter as bigint)                       as batter,
     cast(inning as integer)                      as inning,
     cast(at_bat_number as integer)               as at_bat_number,
+    cast(release_speed as double)                as release_speed,
+    pitch_type,
     cast(outs_when_up as integer)                as outs_when_up,
     on_1b,
     on_2b,
