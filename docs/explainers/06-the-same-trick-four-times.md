@@ -92,12 +92,22 @@ machine where every adjustment was measured rather than fitted, and where we kno
 which parts are still missing.
 
 We'll keep telling you which parts are still missing. Right now the honest list is:
-our games are a little too orderly, because we don't yet model a pitcher losing the
-strike zone *mid-inning* — only whether tonight was a good night or a bad one. That
-makes our extremes slightly too rare, and it means playoff odds from this engine run a
-touch overconfident.
+our games are a little too orderly. We produce slightly too few 1–0 games and too few
+12–3 games.
 
-That's a real limitation, and you should know it's there.
+We chased that in three directions — ballpark and weather, whether the pitcher had his
+stuff, and how good the defense behind him was. All three are real. All three are
+small. Taken together with everything else we can know about a game *before it starts*,
+they account for under a seventh of what's missing.
+
+Which tells us something useful: the rest isn't a fact about the matchup. It's about
+the *order things happen in* — a pitcher who loses the zone for three straight hitters,
+a lineup that starts squaring him up in the fourth. Our model knows the bases and the
+outs; it doesn't know what kind of half-inning this has been. That's the next real
+problem, and it's a harder one than adding another adjustment.
+
+Until then: our extremes are slightly too rare, and playoff odds from this engine run
+a touch overconfident. You should know that's there.
 
 ---
 

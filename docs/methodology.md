@@ -458,11 +458,48 @@ Form is within noise of nothing, and theory agrees: propagating the calibrated s
 through the Markov solve gives a run-rate sd of 0.052 per outing, covering ~58% of a
 game's batters, which supplies about **5%** of the shortfall.
 
-Both attempts at the dispersion problem are now measured and both are small: park and
-weather ~25%, pitcher form ~5%. **Roughly 70% remains unexplained**, and the two
-mechanisms most likely to hold it are not yet modelled — team **defence**, which is
-persistent within a game and currently league-average for everyone, and the
-within-inning sequencing that a per-game multiplier cannot reach by construction.
+### The dispersion gap is not a game-level covariate problem
+
+Three mechanisms were tested. All three are real, and all three are small.
+
+| Mechanism | Share of between-game run variance | Share of the sd gap |
+|---|---|---|
+| Park × weather | 1.61% | ~12% |
+| Day-to-day pitcher form | — | ~5% |
+| Team defence | 0.76% | ~5% |
+| **All game-level covariates combined** | **1.90%** | **~13%** |
+
+The last row is the one that matters. Regressing team-runs on *every* game-level
+covariate available — run environment, opposing defence (leave-one-out), opposing
+starter form, opposing bullpen form, and own offensive form — yields an R² of **1.90%**
+over 18,329 team-games. A simulator that modelled all of them perfectly would move
+team-run sd from 3.006 to 3.038 against a target of 3.246.
+
+**So roughly 87% of the dispersion gap cannot be reached by any adjustment of this
+kind**, and the search should stop. Adding a fifth lookup table would be repeating an
+experiment that has now failed three times for the same underlying reason.
+
+Team defence is worth a note because it is not a weak *effect* — it is a strong,
+persistent team property that simply does not move game-to-game scoring much.
+Observed variance runs 2.8× binomial, and it repeats year over year at r = +0.52 to
++0.64, far more stable than pitcher form. It is genuinely unmodelled in the engine.
+It still buys almost nothing here.
+
+**Correction.** Park and weather were earlier reported as supplying ~25% of the gap,
+from a simulated sd that moved 3.006 → 3.068. That measurement was Monte-Carlo noise
+around a theoretical ceiling of ~12%; the analytic number is the reliable one. The
+conclusion — that it helps and does not solve the problem — is unchanged, but the
+figure was overstated.
+
+**Where the variance actually is.** By elimination and by the earlier decomposition:
+inside games rather than between them. Real half-innings are 5% more variable than
+the model's, and real games correlate across innings beyond anything the observable
+covariates explain. That points at sequencing — a pitcher losing the zone for three
+batters, a lineup that has started squaring him up — which is a property of the
+*order* events arrive in, not of any fact about the matchup knowable beforehand.
+Capturing it means conditioning transitions on the inning's history rather than on
+the base-out state alone, which is a change to the shape of the model rather than an
+addition to it.
 
 Both could have been faked. Turning up sigma until the blowouts appeared would have
 matched the target while claiming pitchers vary far more than the evidence supports,
