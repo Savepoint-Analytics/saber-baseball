@@ -47,6 +47,11 @@ modeling = [
     "statsmodels>=0.14",       # BSD
     "pymc>=5.16",              # Apache-2.0
     "bambi>=0.13",             # MIT
+    # ArviZ 1.0 removed `arviz.concat` and moved InferenceData to xarray DataTree.
+    # PyMC 5.26 still imports the old API, so an unpinned resolve installs arviz 1.2
+    # and `import pymc` fails outright -- which is why PROJECT_CONTEXT's Bayesian
+    # plan has been unreachable. Pinned below the break until PyMC catches up.
+    "arviz<1.0",               # Apache-2.0
     "mlflow>=2.14",            # Apache-2.0
 ]
 serving = [

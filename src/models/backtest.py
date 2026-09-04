@@ -28,6 +28,7 @@ from loguru import logger
 from src.config import settings
 from src.models.baselines import (
     Baseline,
+    BradleyTerryRidge,
     EloBaseline,
     HomeFieldBaseline,
     Log5Baseline,
@@ -55,6 +56,7 @@ MODELS: dict[str, Callable[[], Baseline]] = {
     "log5_winpct": Log5Baseline,
     "pythagorean": PythagoreanBaseline,
     "elo": EloBaseline,
+    "bradley_terry": BradleyTerryRidge,
 }
 
 # Kept separate because these require Statcast form columns; MODELS must stay usable

@@ -353,3 +353,66 @@ class EloBaseline:
         _check_columns(games)
         preds, _ = self._walk(games, dict(self.ratings), self._last_season)
         return preds
+
+
+@dataclass
+class BradleyTerryRidge:
+    """Team strengths fitted jointly by penalised logistic regression.
+
+    Elo is an *online approximation* to this. It walks through games one at a time
+    nudging two ratings by a fixed learning rate ``k``, which is a stand-in for the
+    regularisation and the recency weighting that a batch fit can do properly. Here
+    every game is used at once, the penalty is explicit, and the home-field term is
+    estimated rather than assumed.
+
+    **Recency is weighted, not ignored.** A plain Bradley-Terry fit treats a game from
+    three seasons ago like last night's, which would lose to Elo for the obvious
+    reason. Games are weighted by ``half_life_days``, so the model answers "how good
+    is this team *now*" rather than "how good has this team been".
+
+    The design matrix is one column per team: +1 when home, -1 when away, so a
+    coefficient is that club's strength in log-odds and a matchup is their difference.
+    """
+
+    name: str = "bradley_terry"
+    half_life_days: float = 365.0
+    C: float = 1.0
+    ratings: dict[int, float] = field(default_factory=dict)
+    home_advantage: float = 0.0
+
+    def fit(self, games: pd.DataFrame) -> BradleyTerryRidge:
+        from sklearn.linear_model import LogisticRegression
+
+        _check_columns(games)
+        played = games.dropna(subset=["home_win"])
+        teams = sorted(
+            set(played["home_team_id"].astype(int)) | set(played["away_team_id"].astype(int))
+        )
+        index = {t: i for i, t in enumerate(teams)}
+
+        design = np.zeros((len(played), len(teams)))
+        rows = np.arange(len(played))
+        design[rows, [index[int(t)] for t in played["home_team_id"]]] = 1.0
+        design[rows, [index[int(t)] for t in played["away_team_id"]]] = -1.0
+
+        dates = pd.to_datetime(played["game_date"])
+        age_days = (dates.max() - dates).dt.days.to_numpy(dtype=float)
+        weights = np.exp(-np.log(2.0) * age_days / self.half_life_days)
+
+        # fit_intercept carries home-field advantage: the design is antisymmetric in
+        # the two teams, so anything left over is the edge of batting last.
+        model = LogisticRegression(max_iter=5000, C=self.C, fit_intercept=True)
+        model.fit(design, played["home_win"].to_numpy(dtype=int), sample_weight=weights)
+
+        coefs = model.coef_[0]
+        # Ratings are only identified up to a constant, so centre them.
+        coefs = coefs - coefs.mean()
+        self.ratings = {int(t): float(coefs[i]) for t, i in index.items()}
+        self.home_advantage = float(model.intercept_[0])
+        return self
+
+    def predict_proba(self, games: pd.DataFrame) -> np.ndarray:
+        _check_columns(games)
+        home = np.array([self.ratings.get(int(t), 0.0) for t in games["home_team_id"]])
+        away = np.array([self.ratings.get(int(t), 0.0) for t in games["away_team_id"]])
+        return np.asarray(_expit(home - away + self.home_advantage), dtype=float)

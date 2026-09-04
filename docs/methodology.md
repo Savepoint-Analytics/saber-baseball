@@ -613,6 +613,47 @@ Leakage note: the PA model is fitted on training seasons only, but structural in
 test season. They are physical constants rather than strength estimates, so the effect
 is small — and it favours the simulator, which lost anyway.
 
+## Phase 4: season projection (2026-09-04)
+
+`src/simulation/season.py` Monte-Carlos the remaining schedule to win-total
+distributions, then seeds and plays the postseason bracket — 3 division winners plus
+3 wild cards per league, best-of-3 / 5 / 7 / 7.
+
+**It is driven by any model implementing the `Baseline` protocol.** `project_season`
+calls `fit` on completed games and `predict_proba` on the remaining ones, so
+comparing families on *playoff odds* rather than on game log-loss is a single
+argument. That was the design goal.
+
+Three blockers had to clear first:
+
+- **`sv_games` cannot see the future.** It filters to completed games by design — it
+  is the training spine — so it held 2,084 of 2026's games and none of the 346 still
+  to play. `sv_schedule` is the counterpart that keeps unplayed games.
+- **No league or division anywhere.** A bracket needs them and the schedule feed does
+  not carry them. `src/ingestion/teams.py` pulls the team dimension (one request per
+  season, backfilled 2015-2026) into `sv_teams`, keyed by season because divisions
+  are not static — the Astros switched leagues in 2013.
+- **PyMC would not import.** ArviZ 1.0 removed `arviz.concat`; PyMC 5.26 still calls
+  it, so an unpinned resolve broke `import pymc` outright and made
+  `PROJECT_CONTEXT` §7's Bayesian plan unreachable. Pinned `arviz<1.0`; sampling
+  verified.
+
+### First new family: Bradley-Terry with recency weighting
+
+Elo is an online approximation to Bradley-Terry, so a batch fit with an explicit
+penalty and estimated home-field term ought to match or beat it. It does not:
+**0.6843 against Elo's 0.6781**, behind even Pythagorean.
+
+The gap is **structural, not tuning** — log-loss is flat at 0.6843-0.6850 across
+half-lives from 120 to 730 days. The cause is that Elo keeps updating *during* the
+test season (`predict_proba` walks games in date order and updates after each, which
+stays causal), while this Bradley-Terry fits once and holds one rating from opening
+day to game 162. It cannot react to a June trade or a July injury.
+
+The fair version needs in-season refitting — periodic refit, or an online update on
+top of the batch fit. Until that exists the number above understates the family
+rather than measuring it, and it is recorded that way.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).

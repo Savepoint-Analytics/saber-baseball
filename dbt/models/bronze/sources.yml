@@ -17,5 +17,7 @@ sources:
         description: "Retrosheet play-by-play events (free w/ required notice)."
       - name: statsapi_schedule
         description: "MLB Stats API schedule (© MLBAM) — derived analysis only."
+      - name: teams
+        description: "MLB team dimension: league, division, venue (© MLBAM)."
       - name: chadwick_register
         description: "Chadwick Bureau player ID crosswalk (open)."

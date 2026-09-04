@@ -11,8 +11,8 @@ BACKFILL_START ?= 2015
 BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
-        ingest-statcast ingest-retrosheet ingest-statsapi backfill dbt dbt-duckdb \
-        publish sync-minio warehouse flows pipeline backtest sim-eval test lint fmt typecheck serve clean
+        ingest-statcast ingest-retrosheet ingest-statsapi ingest-teams backfill dbt dbt-duckdb \
+        publish sync-minio warehouse flows pipeline backtest sim-eval season test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -43,6 +43,9 @@ ingest-statcast: ## Pull a Statcast window (override START/END)
 
 ingest-retrosheet: ## Pull Retrosheet events for $(SEASON)
 	uv run python -m src.ingestion.retrosheet --season $(SEASON)
+
+ingest-teams: ## Pull the MLB team dimension (league/division) for $(SEASON)
+	uv run python -m src.ingestion.teams --season $(SEASON)
 
 ingest-statsapi: ## Pull MLB Stats API schedule for $(SEASON)
 	uv run python -m src.ingestion.statsapi --season $(SEASON)
@@ -81,6 +84,9 @@ flows: ## Serve the scheduled Prefect deployment (long-running; Ctrl-C to stop)
 
 pipeline: ## Run the full ingest -> dbt -> publish chain once, right now
 	$(ENVLOAD) && uv run python -c "from orchestration.flows import daily_pipeline; daily_pipeline()"
+
+season: ## Project the season to playoff & World Series odds
+	uv run python -m src.simulation.season --season $(SEASON)
 
 sim-eval: ## Score the PA simulator against the classifiers on one metric
 	uv run python -m src.models.evaluate_simulator

@@ -160,3 +160,27 @@ models:
           - accepted_values:
               arguments: {values: ["close", "medium", "blowout"]}
 
+  - name: sv_teams
+    description: >
+      Team dimension per season (league, division, home venue). Keyed by season
+      because divisions are not static.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments: {combination_of_columns: [season, team_id]}
+    columns:
+      - name: division_name
+        tests: [not_null]
+
+  - name: sv_schedule
+    description: >
+      Full regular-season schedule including unplayed games. sv_games keeps only
+      completed games for training; this is what a season projection consumes.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments: {combination_of_columns: [game_pk]}
+    columns:
+      - name: is_played
+        tests: [not_null]
+      - name: is_remaining
+        tests: [not_null]
+
