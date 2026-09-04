@@ -206,6 +206,11 @@ def test_walk_forward_never_trains_on_the_test_season():
 def test_walk_forward_returns_metrics_and_predictions_for_every_fold():
     games = _games(seasons=(2019, 2020, 2021, 2022))
     metrics, preds = walk_forward(games, min_train_seasons=2)
-    assert set(metrics.model.unique()) == {"home_field", "log5_winpct", "pythagorean", "elo"}
+    # Derived from the registry, not hard-coded: adding a model family should not
+    # fail a test about fold coverage. This assertion has now broken twice for that
+    # reason -- once when Bradley-Terry was registered, once for the published marts.
+    from src.models.backtest import MODELS
+
+    assert set(metrics.model.unique()) == set(MODELS)
     assert len(preds) == len(metrics.model.unique()) * (games.season >= 2021).sum()
     assert metrics.log_loss.between(0, 2).all()
