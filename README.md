@@ -181,7 +181,8 @@ make dbt-duckdb                          # bronze → silver → gold
    in as per-game run multipliers, and day-to-day pitcher form as a per-outing one.
    The engine remains ~6% under-dispersed: park/weather supply ~25% of the gap and
    pitcher form ~5%, both measured rather than tuned (see `docs/methodology.md`).
-   Next: Monte-Carlo the schedule → playoff & World Series odds.
+   Plain-language write-ups live in [`docs/explainers/`](docs/explainers/). Next:
+   Monte-Carlo the schedule → playoff & World Series odds.
 6. **Phase 5 — Counterfactuals:** perturb player rate inputs, re-simulate, surface
    improvement levers; package as affordable analysis products.
 
