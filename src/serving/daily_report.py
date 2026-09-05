@@ -171,7 +171,14 @@ def main(
         proj = project_season(season, n_sims=n_sims, rng=np.random.default_rng(7))
         table = proj.odds()
         table = table[table.playoff_pct > 0.5]
-        print(f"\n\nPLAYOFF ODDS — {season} (teams above 0.5%)\n")
+        print(f"\n\nPLAYOFF ODDS — {season} (teams above 0.5%)")
+        # Measured on 2023-25 from 1 September (docs/methodology.md, "Playoff odds,
+        # calibration-tested"): clubs stated at 75-95% qualified half the time. The
+        # caveat travels with the number until rating uncertainty is propagated.
+        print(
+            "Calibration note: backtested odds are overconfident in the 25-95% range "
+            "(slope 0.58); read 85% as roughly 70%.\n"
+        )
         print(
             table[["team", "proj_wins", "division_pct", "playoff_pct", "ws_pct"]]
             .round(1)
