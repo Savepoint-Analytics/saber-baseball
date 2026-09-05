@@ -12,7 +12,7 @@ BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
         ingest-statcast ingest-retrosheet ingest-statsapi ingest-teams backfill dbt dbt-duckdb \
-        publish sync-minio warehouse flows pipeline backtest sim-eval season today test lint fmt typecheck serve clean
+        publish sync-minio warehouse flows pipeline backtest sim-eval season season-backtest today test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -90,6 +90,9 @@ today: ## Publishable predictions for today's slate + playoff odds
 
 season: ## Project the season to playoff & World Series odds
 	uv run python -m src.simulation.season --season $(SEASON)
+
+season-backtest: ## Score Sept-1 playoff odds for 2023-25 against what happened
+	uv run python -m src.models.backtest_season --seasons 2023 --seasons 2024 --seasons 2025
 
 sim-eval: ## Score the PA simulator against the classifiers on one metric
 	uv run python -m src.models.evaluate_simulator

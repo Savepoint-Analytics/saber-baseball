@@ -706,6 +706,62 @@ backtest does not take ten minutes.
 model is static. A hierarchical fit with variational refits would plausibly land near
 0.678 and is the one remaining candidate with a credible path past Elo.
 
+### Playoff odds, calibration-tested (2026-09-04)
+
+Everything above validates at *game* level. Playoff odds are a different claim, and
+the aggregation from game probabilities through simulated standings to a bracket can
+lose calibration even when every input is calibrated. So `src/models/backtest_season.py`
+(`make season-backtest`) rewinds each finished 12-team-format season to 1 September,
+projects it exactly as `make today` would have (Elo, fit only on games before the cut,
+5,000 sims), and scores the stated percentages against what happened. Actual outcomes
+are read off the postseason record itself — a club that appears in October was in the
+field; division titles use MLB's head-to-head tiebreaker, which decided three of them
+(2022 Braves/Mets, 2023 Astros/Rangers, 2025 Blue Jays/Yankees).
+
+**2023-2025, 90 team-seasons:**
+
+| claim        | events | Brier  | base-rate Brier | skill | calibration slope |
+|--------------|-------:|-------:|----------------:|------:|------------------:|
+| division     | 18     | 0.048  | 0.160           | 0.70  | —                 |
+| playoffs     | 36     | 0.111  | 0.240           | 0.54  | **0.58 ± 0.12**   |
+| pennant      | 6      | 0.058  | 0.062           | 0.06  | —                 |
+| World Series | 3      | 0.032  | 0.032           | 0.02  | —                 |
+
+Win totals: MAE 2.2, RMSE 2.8, zero bias, 80% interval covers 78% (target 80%).
+
+**What holds up.** The locks and the also-rans: 22 of 22 clubs given ≥95% made it,
+1 of 40 given ≤5% did. Division odds are the best-calibrated claim. Win-total
+intervals are the right width on average.
+
+**What does not.** The middle is overconfident, and it is not noise. Clubs given
+75-95% (n=12, mean 86%) made it **6 times, not 10** — binomial p = 0.004. Clubs given
+5-25% (n=11, mean 12%) made it 4 times, not 1 (p = 0.04). The calibration slope of
+0.58 (SE 0.12) says the stated odds should be shrunk roughly 40% on the logit scale
+toward the base rate. Adding 2022 (120 team-seasons) moves the slope to 0.66 ± 0.12;
+same conclusion. The misses have names: the 2023 Marlins (4% → in), the 2024 Tigers
+(8% → in, on a 31-11 finish), the 2025 Guardians (10% → in, from 15½ back), the 2025
+Astros (90% → out). Each finished 4-6 wins beyond a projection whose p90 was 3 wins
+above its mean.
+
+**Diagnosis.** The projection's only source of spread is the coin-flips: `wins +
+Binomial(remaining, p)`. Team strength enters as a point estimate. A club whose Elo
+says 82 wins might really be an 86-win team by September, and that error is simply not
+in the interval — which is why the tails are heavier than the intervals allow and why
+the ordering between a "15%" club and an "85%" club is weaker than stated. The
+pennant and World Series odds carry almost no skill over the base rate (three and six
+events cannot resolve that either way, but the point estimate is near zero), which
+is consistent with the same mechanism plus a bracket that is close to a coin flip
+between qualifiers.
+
+**Decision.** The playoff odds in `make today` stay, with the reliability table
+attached; publishing them unqualified would be publishing a known 40% overconfidence.
+Two fixes, in order of principle: (1) propagate rating uncertainty — draw each
+club's strength per simulation from the Elo estimate's error distribution, with the
+scale set so the backtest slope reaches 1; (2) failing that, a Platt-style
+recalibration of the logit by the fitted slope. The first is the right one because it
+also widens the win-total tails the misses landed in; the second only fixes the
+headline number. Neither is built yet; the backtest that will judge them is.
+
 ## Evaluation
 
 - **Primary metric:** log-loss vs. an Elo/home-field baseline (must beat it).

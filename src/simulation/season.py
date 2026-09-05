@@ -23,6 +23,7 @@ Run::
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass
 
 import duckdb
@@ -51,18 +52,45 @@ def _lake() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(str(path), read_only=True)
 
 
-def load_season_state(season: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Standings so far, the games still to play, and the team dimension."""
+def _cut(as_of: dt.date | None) -> tuple[str, str]:
+    """SQL predicates splitting a season into "known" and "still to play" at ``as_of``.
+
+    With no cut the split is the live one: played games versus games still on the
+    calendar. With a cut it is the historical one: everything before the date is
+    known, everything played on or after it is what the projection has to forecast.
+    Using the games that *were* played, rather than the schedule as it stood, is a
+    small ex-post leak (make-up dates for later rain-outs) that changes who plays
+    whom on which day but not who plays whom — immaterial to a model that ignores the
+    calendar.
+    """
+    if as_of is None:
+        return "is_played and home_win is not null", "is_remaining"
+    return (
+        f"is_played and home_win is not null and game_date < date '{as_of.isoformat()}'",
+        f"is_played and home_win is not null and game_date >= date '{as_of.isoformat()}'",
+    )
+
+
+def load_season_state(
+    season: int, as_of: dt.date | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Standings so far, the games still to play, and the team dimension.
+
+    ``as_of`` rewinds a finished season to that date so a projection can be scored
+    against what actually happened — the calibration backtest in
+    :mod:`src.models.backtest_season`.
+    """
+    known, to_play = _cut(as_of)
     con = _lake()
     try:
         standings = con.sql(
             f"""
             with played as (
                 select home_team_id as team_id, home_win as won from main_silver.sv_schedule
-                where season = {season} and is_played and home_win is not null
+                where season = {season} and {known}
                 union all
                 select away_team_id, 1 - home_win from main_silver.sv_schedule
-                where season = {season} and is_played and home_win is not null
+                where season = {season} and {known}
             )
             select team_id, count(*) as games, sum(won) as wins
             from played group by 1
@@ -72,7 +100,7 @@ def load_season_state(season: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataF
             f"""
             select game_pk, game_date, season, home_team_id, away_team_id, venue_id
             from main_silver.sv_schedule
-            where season = {season} and is_remaining
+            where season = {season} and {to_play}
             order by game_date, game_pk
             """
         ).df()
@@ -85,8 +113,15 @@ def load_season_state(season: int) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataF
     return standings, remaining, teams
 
 
-def load_training_games(season: int, history: int = 3) -> pd.DataFrame:
-    """Completed games a model fits on: this season plus prior ones for context."""
+def load_training_games(
+    season: int, history: int = 3, as_of: dt.date | None = None
+) -> pd.DataFrame:
+    """Completed games a model fits on: this season plus prior ones for context.
+
+    ``as_of`` is the same cut as in :func:`load_season_state`; a model must not see
+    a result the projection is supposed to be forecasting.
+    """
+    cutoff = "" if as_of is None else f"and game_date < date '{as_of.isoformat()}'"
     con = _lake()
     try:
         return con.sql(
@@ -95,7 +130,7 @@ def load_training_games(season: int, history: int = 3) -> pd.DataFrame:
                    home_team_id, away_team_id, home_score, away_score, home_win
             from main_silver.sv_games
             where season between {season - history} and {season}
-              and season_phase = 'regular' and home_win is not null
+              and season_phase = 'regular' and home_win is not null {cutoff}
             order by game_date, game_pk
             """
         ).df()
@@ -172,13 +207,18 @@ def project_season(
     model: Baseline | None = None,
     n_sims: int = 10000,
     rng: np.random.Generator | None = None,
+    as_of: dt.date | None = None,
 ) -> SeasonProjection:
-    """Roll the remaining schedule and postseason ``n_sims`` times."""
+    """Roll the remaining schedule and postseason ``n_sims`` times.
+
+    ``as_of`` projects the season as it stood on that date (see
+    :func:`load_season_state`); the default projects from today.
+    """
     rng = rng or np.random.default_rng()
     model = model or EloBaseline()
 
-    standings, remaining, teams = load_season_state(season)
-    training = load_training_games(season)
+    standings, remaining, teams = load_season_state(season, as_of)
+    training = load_training_games(season, as_of=as_of)
     model.fit(training)
 
     team_ids = np.sort(teams.team_id.to_numpy(dtype=int))
@@ -196,9 +236,10 @@ def project_season(
         # Models expect the outcome columns to exist even when unknown; an unplayed
         # game legitimately has no score, and asserting the schema here is better than
         # a KeyError inside whichever model family is being trialled.
+        # The historical cut selects games with real scores; blanking them (not just
+        # adding missing columns) is what keeps a rewound projection honest.
         for col in ("home_score", "away_score", "home_win"):
-            if col not in remaining.columns:
-                remaining[col] = np.nan
+            remaining[col] = np.nan
         if "season_phase" not in remaining.columns:
             remaining["season_phase"] = "regular"
 
