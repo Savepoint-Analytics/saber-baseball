@@ -37,12 +37,24 @@ from src.models.baselines import Baseline, EloBaseline
 
 app = typer.Typer(add_completion=False, help="Project a season to playoff odds.")
 
+_EPS = 1e-6
 DIVISION_WINNERS_PER_LEAGUE = 3
 WILD_CARDS_PER_LEAGUE = 3
 PLAYOFF_TEAMS_PER_LEAGUE = DIVISION_WINNERS_PER_LEAGUE + WILD_CARDS_PER_LEAGUE
 # Home-field edge inside a series, in log-odds. Matches the measured regular-season
 # rate (~52.8% home) rather than the larger number folklore assumes.
 HOME_FIELD_LOGIT = 0.112
+# Per-club strength uncertainty, in log-odds, held constant across a simulated
+# season. See `estimate_rating_sd` in src/models/backtest_season.py for where the
+# number comes from: it is matched to the spread of realised win-total errors over
+# 2022-25, NOT tuned on the playoff calibration it is judged by. `docs/methodology.md`
+# records why that distinction changed the conclusion. 0.0 disables the mechanism and
+# reproduces the pre-2026-09-07 behaviour.
+RATING_SD = 0.154
+# Simulations are processed in blocks so peak memory stays flat in `n_sims`: an
+# opening-day projection is 2,430 games, and materialising (n_sims, n_games)
+# probabilities and uniforms at once is ~200MB before anything else runs.
+SIM_CHUNK = 1000
 
 
 def _lake() -> duckdb.DuckDBPyConnection:
@@ -191,6 +203,10 @@ class SeasonProjection:
                     "proj_wins": self.win_totals.mean(axis=0),
                     "win_p10": np.percentile(self.win_totals, 10, axis=0),
                     "win_p90": np.percentile(self.win_totals, 90, axis=0),
+                    # Spread of the simulated win totals. Built here, where the
+                    # column order still matches `teams`; `odds()` sorts by playoff
+                    # odds, so attaching it afterwards would silently misalign it.
+                    "sim_win_sd": self.win_totals.std(axis=0),
                     "division_pct": 100 * self.won_division.mean(axis=0),
                     "playoff_pct": 100 * self.made_playoffs.mean(axis=0),
                     "pennant_pct": 100 * self.won_pennant.mean(axis=0),
@@ -208,11 +224,21 @@ def project_season(
     n_sims: int = 10000,
     rng: np.random.Generator | None = None,
     as_of: dt.date | None = None,
+    rating_sd: float = RATING_SD,
 ) -> SeasonProjection:
     """Roll the remaining schedule and postseason ``n_sims`` times.
 
     ``as_of`` projects the season as it stood on that date (see
     :func:`load_season_state`); the default projects from today.
+
+    ``rating_sd`` propagates *rating* uncertainty on top of the coin-flips. Without
+    it the only randomness is the schedule outcome — a club's strength enters as a
+    point estimate, so a projection asserts it knows an 82-win club from an 86-win
+    club when in September it does not. Each simulation draws a per-club offset in
+    log-odds, held constant all season because a rating error is a season-long
+    property rather than per-game noise, and applies it to every game that club
+    plays. Working in log-odds rather than Elo points keeps this model-agnostic:
+    any :class:`Baseline` returns probabilities, and only Elo has "points".
     """
     rng = rng or np.random.default_rng()
     model = model or EloBaseline()
@@ -244,20 +270,42 @@ def project_season(
             remaining["season_phase"] = "regular"
 
         p_home = model.predict_proba(remaining)
-        outcomes = rng.random((n_sims, len(remaining))) < p_home[None, :]
 
         # Accumulate via one-hot incidence rather than scatter-add: a team appears in
         # many remaining games, so the indices repeat and plain fancy indexing would
         # silently keep only the last write.
         home_hot = np.zeros((len(remaining), len(team_ids)))
         away_hot = np.zeros((len(remaining), len(team_ids)))
+        home_idx = np.empty(len(remaining), dtype=int)
+        away_idx = np.empty(len(remaining), dtype=int)
         for g, (h, a) in enumerate(
             zip(remaining.home_team_id, remaining.away_team_id, strict=True)
         ):
-            home_hot[g, index[int(h)]] = 1.0
-            away_hot[g, index[int(a)]] = 1.0
-        wins += outcomes.astype(float) @ home_hot + (~outcomes).astype(float) @ away_hot
-        logger.info("projected {} remaining games over {} sims", len(remaining), n_sims)
+            home_idx[g], away_idx[g] = index[int(h)], index[int(a)]
+            home_hot[g, home_idx[g]] = 1.0
+            away_hot[g, away_idx[g]] = 1.0
+
+        base_logit = np.log(np.clip(p_home, _EPS, 1 - _EPS) / (1 - np.clip(p_home, _EPS, 1 - _EPS)))
+        for lo in range(0, n_sims, SIM_CHUNK):
+            hi = min(lo + SIM_CHUNK, n_sims)
+            if rating_sd > 0:
+                # One offset per club per simulation, applied to every game it plays.
+                # The opponent's offset enters with the opposite sign: what decides a
+                # game is the *difference* in strength, so a season where everyone is
+                # rated 20 points high is the same season.
+                offsets = rng.normal(0.0, rating_sd, size=(hi - lo, len(team_ids)))
+                z = base_logit[None, :] + offsets[:, home_idx] - offsets[:, away_idx]
+                p = 1.0 / (1.0 + np.exp(-z))
+            else:
+                p = p_home[None, :]
+            outcomes = rng.random((hi - lo, len(remaining))) < p
+            wins[lo:hi] += outcomes.astype(float) @ home_hot + (~outcomes).astype(float) @ away_hot
+        logger.info(
+            "projected {} remaining games over {} sims (rating_sd={})",
+            len(remaining),
+            n_sims,
+            rating_sd,
+        )
     else:
         logger.warning("season {} has no remaining games; projecting the final standings", season)
 
@@ -337,8 +385,9 @@ def project_season(
 def main(
     season: int = typer.Option(2026, "--season"),
     n_sims: int = typer.Option(10000, "--n-sims"),
+    rating_sd: float = typer.Option(RATING_SD, "--rating-sd"),
 ) -> None:
-    proj = project_season(season, n_sims=n_sims, rng=np.random.default_rng(7))
+    proj = project_season(season, n_sims=n_sims, rng=np.random.default_rng(7), rating_sd=rating_sd)
     print(proj.odds().round(1).to_string(index=False))
 
 

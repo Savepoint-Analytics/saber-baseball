@@ -17,7 +17,7 @@ import pytest
 
 from src.config import settings
 from src.models.backtest import STARTER_COLUMNS
-from src.serving.daily_report import ATTRIBUTION_SOURCES, build_features, load_slate
+from src.serving.daily_report import ATTRIBUTION_SOURCES, _shown, build_features, load_slate
 
 LAKE = (settings.data_dir / "saber.duckdb").resolve()
 needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
@@ -91,3 +91,14 @@ def test_predictions_are_probabilities_and_sensible_scores():
     assert games.home_win_pct.between(5, 95).all(), "a win probability left the plausible range"
     assert games.proj_home.between(1.5, 9.0).all()
     assert games.proj_away.between(1.5, 9.0).all()
+
+
+def test_missing_weather_renders_instead_of_crashing():
+    """A game with no posted forecast is normal — StatsAPI populates weather closer
+    to first pitch. `pd.NA or "?"` raises, so the report used to die on the whole
+    slate because one game had no temperature."""
+    assert _shown(pd.NA) == "?"
+    assert _shown(None) == "?"
+    assert _shown(np.nan) == "?"
+    assert _shown(72) == "72"
+    assert _shown("Partly Cloudy") == "Partly Cloudy"

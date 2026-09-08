@@ -16,9 +16,11 @@ import pytest
 from src.config import settings
 from src.models.backtest_season import (
     OUTCOMES,
+    calibration_slope,
     calibration_summary,
     outcomes_from_games,
     reliability,
+    slope_null_distribution,
 )
 from src.simulation.season import load_season_state, load_training_games
 
@@ -127,3 +129,42 @@ def test_the_historical_cut_leaves_games_to_project():
     # And the live path is untouched: no cut means the season's final standings.
     full, none_left, _ = load_season_state(2025)
     assert none_left.empty and full.games.max() == 162
+
+
+def test_the_slope_survives_perfect_separation():
+    """A simulated season whose qualifiers are exactly the favourites separates the
+    logit perfectly. An unpenalised fit diverges; the null distribution hits this
+    routinely, so the estimator has to return a finite number."""
+    p = np.linspace(0.02, 0.98, 40)
+    y = (p > 0.5).astype(float)
+    slope = calibration_slope(p, y)
+    assert np.isfinite(slope) and slope > 0
+
+
+def test_a_calibrated_forecast_sits_inside_its_own_null():
+    """Machinery check for `slope_null_distribution`.
+
+    When the outcomes really are drawn from the stated probabilities, the observed
+    slope must be an unremarkable draw from the null — and the null itself need not
+    centre on 1, which is exactly why the comparison is made against it rather than
+    against 1.
+    """
+    rng = np.random.default_rng(4)
+    stated = rng.uniform(0.02, 0.98, 60)
+    sims = [(rng.random((500, 60)) < stated).astype(bool)]
+    truth = (rng.random(60) < stated).astype(float)
+    null = slope_null_distribution(sims, stated, n_draws=300, seed=1)
+    observed = calibration_slope(stated, truth)
+    pval = float(np.mean(null <= observed))
+    assert 0.05 < pval < 0.95, f"calibrated forecast flagged at p={pval}"
+
+
+def test_an_overconfident_forecast_is_flagged_against_the_null():
+    """The same test must fire when the truth is a shrunk version of what was stated."""
+    rng = np.random.default_rng(5)
+    stated = rng.uniform(0.02, 0.98, 60)
+    sims = [(rng.random((500, 60)) < stated).astype(bool)]
+    shrunk = 1 / (1 + np.exp(-0.35 * np.log(stated / (1 - stated))))
+    truth = (rng.random(60) < shrunk).astype(float)
+    null = slope_null_distribution(sims, stated, n_draws=300, seed=1)
+    assert float(np.mean(null <= calibration_slope(stated, truth))) < 0.05

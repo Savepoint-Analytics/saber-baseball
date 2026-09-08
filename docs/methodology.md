@@ -733,12 +733,26 @@ Win totals: MAE 2.2, RMSE 2.8, zero bias, 80% interval covers 78% (target 80%).
 1 of 40 given ≤5% did. Division odds are the best-calibrated claim. Win-total
 intervals are the right width on average.
 
-**What does not.** The middle is overconfident, and it is not noise. Clubs given
-75-95% (n=12, mean 86%) made it **6 times, not 10** — binomial p = 0.004. Clubs given
-5-25% (n=11, mean 12%) made it 4 times, not 1 (p = 0.04). The calibration slope of
-0.58 (SE 0.12) says the stated odds should be shrunk roughly 40% on the logit scale
-toward the base rate. Adding 2022 (120 team-seasons) moves the slope to 0.66 ± 0.12;
-same conclusion. The misses have names: the 2023 Marlins (4% → in), the 2024 Tigers
+**What does not.** The middle is overconfident. Clubs given 75-95% (n=12, mean 86%)
+made it **6 times, not 10**; clubs given 5-25% (n=11, mean 12%) made it 4 times, not 1.
+The calibration slope is 0.58.
+
+> **Correction (2026-09-07).** Two claims in the paragraph above were wrong as
+> originally written, and the direction of the finding survives both. (1) The binomial
+> p-values first reported here (0.004 and 0.04) treated 90 team-seasons as 90
+> independent trials. They are not: exactly twelve clubs per league qualify, so one
+> club's success is another's failure. (2) The slope was compared against 1. On a
+> sample this size, with mostly extreme probabilities, a logistic slope is biased well
+> above 1 even for a perfectly calibrated forecast — the null here centres near 2, so
+> "0.58 versus 1" understated the gap while resting on the wrong benchmark. Both are
+> fixed by `slope_null_distribution`, which scores a *simulated* season as if it were
+> the truth and therefore inherits the twelve-per-league constraint for free. Against
+> that null the overconfidence is still there: observed 0.63 against a calibrated null
+> of 1.98 [0.67, 5.15], **p = 0.013**. The recalibration advice that followed from
+> "shrink 40% toward the base rate" was derived against the wrong benchmark and has
+> been withdrawn.
+
+The misses have names: the 2023 Marlins (4% → in), the 2024 Tigers
 (8% → in, on a 31-11 finish), the 2025 Guardians (10% → in, from 15½ back), the 2025
 Astros (90% → out). Each finished 4-6 wins beyond a projection whose p90 was 3 wins
 above its mean.
@@ -754,13 +768,55 @@ is consistent with the same mechanism plus a bracket that is close to a coin fli
 between qualifiers.
 
 **Decision.** The playoff odds in `make today` stay, with the reliability table
-attached; publishing them unqualified would be publishing a known 40% overconfidence.
-Two fixes, in order of principle: (1) propagate rating uncertainty — draw each
-club's strength per simulation from the Elo estimate's error distribution, with the
-scale set so the backtest slope reaches 1; (2) failing that, a Platt-style
-recalibration of the logit by the fitted slope. The first is the right one because it
-also widens the win-total tails the misses landed in; the second only fixes the
-headline number. Neither is built yet; the backtest that will judge them is.
+attached; publishing them unqualified would be publishing a known overconfidence.
+
+### Propagating rating uncertainty — built, and it does not close the gap (2026-09-07)
+
+`project_season(..., rating_sd=...)` now draws a per-club strength offset per
+simulation, in log-odds, held constant across the simulated season and applied to
+every game that club plays — a rating error is a season-long property, not per-game
+noise. It enters as a difference between the two clubs, so a simulated world where
+everyone is rated high is the same world. Log-odds rather than Elo points keeps it
+model-agnostic: every `Baseline` returns probabilities, only Elo has "points".
+
+**The scale is estimated, not tuned.** `estimate_rating_sd` matches the projection's
+own win-total spread to the spread of *realised* win-total errors over 2022-25 —
+a quantity with nothing to do with playoff outcomes. Fitting the knob to the number
+it is then judged by would guarantee a good score and prove nothing. That crossing
+is **σ = 0.154 log-odds** (≈ 27 Elo points), with the observed moment's season-block
+bootstrap putting it somewhere in 0-0.26.
+
+**And it barely moves the calibration.** Sweeping σ against both criteria:
+
+| σ (log-odds) | sim win sd | observed win sd | p10-p90 coverage | playoff slope | p vs null |
+|---:|---:|---:|---:|---:|---:|
+| 0.00 | 2.58 | 2.79 | 0.80 | 0.655 | 0.008 |
+| **0.154** | **2.79** | **2.79** | **0.81** | 0.700 | 0.022 |
+| 0.40 | 3.69 | 2.80 | 0.94 | 0.930 | 0.329 |
+
+The two criteria disagree, and that is the finding. At the σ the win-total evidence
+supports, the playoff odds are still miscalibrated (p = 0.022). The σ that *would*
+fix them, ≈ 0.40, is outside the bootstrap interval for σ and inflates the win-total
+spread 32% beyond the realised error — 94% of clubs land inside a nominal 80%
+interval. Buying a calibrated headline number would mean knowingly breaking the
+interval calibration that currently holds.
+
+**What that implies about the cause.** Independent Gaussian noise of the right
+*scale* does not reproduce the miscalibration, so the missing uncertainty is the
+wrong *shape*. The misses point the same way: the 2023 Marlins, 2024 Tigers and 2025
+Guardians all surged from outside, the 2025 Astros collapsed from inside. That is
+heavier tails, or strength errors correlated with a club's position in the race
+(deadline additions, September sell-offs, injuries to a contender) — none of which a
+symmetric per-club draw can express. A heavier-tailed offset, or one conditioned on
+race position, is the next thing to test.
+
+σ = 0.154 ships as the default anyway: it is the value the evidence supports, it fixes
+a real if small under-dispersion in the win totals, and it is honest about what it
+does not fix. On the live 2026 slate it moves playoff odds by 0.48 points on average —
+in September, standings dominate and there is little left for rating uncertainty to
+do. The Platt-style recalibration of the logit remains available and remains
+unattractive: it would repair the headline number without touching the win-total
+tails the misses actually landed in.
 
 ## Evaluation
 

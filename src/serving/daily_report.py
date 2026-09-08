@@ -143,6 +143,11 @@ def predict_slate(day: date) -> pd.DataFrame:
     return out.sort_values("home_win_pct", ascending=False)
 
 
+def _shown(value: object) -> str:
+    """Render a possibly-missing field for the report."""
+    return "?" if pd.isna(value) else str(value)
+
+
 @app.command()
 def main(
     day: str = typer.Option(None, "--date", help="YYYY-MM-DD; defaults to today."),
@@ -160,7 +165,10 @@ def main(
         for r in games.itertuples():
             matchup = f"{r.away_team} @ {r.home_team}"
             score = f"{r.proj_away:.1f} - {r.proj_home:.1f}"
-            cond = f"{r.weather_condition or '?'}, {r.weather_temp_f or '?'}F"
+            # `or` is not safe here: weather_temp_f is a nullable Int64, and
+            # `pd.NA or "?"` raises rather than falling through. A game with no
+            # posted forecast yet is normal — it must print, not crash the report.
+            cond = f"{_shown(r.weather_condition)}, {_shown(r.weather_temp_f)}F"
             flag = "" if r.starters_known else "  (starter form unavailable)"
             print(f"{matchup:<46}{r.home_win_pct:>9.1f}%{score:>14}{cond:>22}{flag}")
 
@@ -173,11 +181,15 @@ def main(
         table = table[table.playoff_pct > 0.5]
         print(f"\n\nPLAYOFF ODDS — {season} (teams above 0.5%)")
         # Measured on 2023-25 from 1 September (docs/methodology.md, "Playoff odds,
-        # calibration-tested"): clubs stated at 75-95% qualified half the time. The
-        # caveat travels with the number until rating uncertainty is propagated.
+        # calibration-tested"): clubs stated at 75-95% qualified about half the time,
+        # against a null that respects the twelve-per-league constraint (p = 0.013).
+        # Propagating rating uncertainty narrowed this only slightly, so the caveat
+        # travels with the number. Deliberately no numeric recalibration factor: three
+        # seasons pin the direction, not the size.
         print(
-            "Calibration note: backtested odds are overconfident in the 25-95% range "
-            "(slope 0.58); read 85% as roughly 70%.\n"
+            "Calibration note: mid-range odds are overconfident in backtest — clubs "
+            "given 75-95% qualified about half the time (n=11). Read them as "
+            "directional. Near-locks and near-eliminations are well calibrated.\n"
         )
         print(
             table[["team", "proj_wins", "division_pct", "playoff_pct", "ws_pct"]]

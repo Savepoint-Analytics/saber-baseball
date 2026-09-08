@@ -7,6 +7,8 @@ seeding error produces a plausible-looking table that is quietly wrong.
 
 from __future__ import annotations
 
+import datetime as dt
+
 import numpy as np
 import pytest
 
@@ -90,3 +92,40 @@ def test_any_model_family_can_drive_the_projection():
     for factory in (PythagoreanBaseline, BradleyTerryRidge):
         proj = project_season(2026, model=factory(), n_sims=120, rng=np.random.default_rng(1))
         assert (proj.made_playoffs.sum(axis=1) == 12).all(), factory.__name__
+
+
+@needs_lake
+def test_rating_uncertainty_widens_the_win_total_spread():
+    """The whole point of `rating_sd`: a point-estimate rating understates spread.
+
+    Same seed, same schedule — only the strength uncertainty differs, so any change
+    in spread is attributable to it.
+    """
+    cut = dt.date(2025, 9, 1)
+    tight = project_season(
+        2025, n_sims=600, rng=np.random.default_rng(11), as_of=cut, rating_sd=0.0
+    )
+    wide = project_season(2025, n_sims=600, rng=np.random.default_rng(11), as_of=cut, rating_sd=0.3)
+    assert wide.win_totals.std(axis=0).mean() > tight.win_totals.std(axis=0).mean() * 1.1
+    # ...and it must not move the central projection: the offsets are mean-zero and
+    # enter as a difference, so a season where every club is rated high is unchanged.
+    shift = abs(wide.win_totals.mean(axis=0) - tight.win_totals.mean(axis=0)).mean()
+    assert shift < 1.0, f"rating uncertainty shifted the projection by {shift:.2f} wins"
+
+
+@needs_lake
+def test_rating_uncertainty_leaves_the_bracket_invariants_intact():
+    proj = project_season(
+        2025, n_sims=300, rng=np.random.default_rng(5), as_of=dt.date(2025, 9, 1), rating_sd=0.3
+    )
+    assert (proj.made_playoffs.sum(axis=1) == 2 * PLAYOFF_TEAMS_PER_LEAGUE).all()
+    assert (proj.won_world_series.sum(axis=1) == 1).all()
+
+
+@needs_lake
+def test_win_totals_are_conserved_under_perturbation():
+    """Every game produces exactly one winner, offsets or not."""
+    cut = dt.date(2025, 9, 1)
+    proj = project_season(2025, n_sims=200, rng=np.random.default_rng(2), as_of=cut, rating_sd=0.3)
+    totals = proj.win_totals.sum(axis=1)
+    assert totals.std() < 1e-9, "league-wide wins should be identical in every simulation"

@@ -34,7 +34,7 @@ from loguru import logger
 from src.config import settings
 from src.models.backtest import brier_score, log_loss
 from src.models.baselines import Baseline, EloBaseline
-from src.simulation.season import project_season
+from src.simulation.season import RATING_SD, project_season
 
 app = typer.Typer(add_completion=False, help="Score historical playoff odds for calibration.")
 
@@ -148,13 +148,14 @@ def load_actual_outcomes(season: int) -> pd.DataFrame:
     return outcomes_from_games(games, teams)
 
 
-def backtest(
+def backtest_detail(
     seasons: list[int],
     as_of: tuple[int, int] = (9, 1),
     n_sims: int = 5000,
     model_factory: Callable[[], Baseline] = EloBaseline,
     seed: int = 7,
-) -> pd.DataFrame:
+    rating_sd: float = RATING_SD,
+) -> tuple[pd.DataFrame, list[np.ndarray]]:
     """Project each season from ``as_of`` (month, day) and join what happened.
 
     Returns one row per team-season with the stated percentages and the outcomes.
@@ -162,7 +163,8 @@ def backtest(
     model carrying state across calls would let one season's outcome into the next
     season's forecast.
     """
-    frames = []
+    frames: list[pd.DataFrame] = []
+    sims: list[np.ndarray] = []
     for season in seasons:
         cut = dt.date(season, *as_of)
         proj = project_season(
@@ -171,30 +173,113 @@ def backtest(
             n_sims=n_sims,
             rng=np.random.default_rng(seed + season),
             as_of=cut,
+            rating_sd=rating_sd,
         )
         odds = proj.odds().assign(season=season, as_of=cut)
         actual = load_actual_outcomes(season)
-        frames.append(odds.merge(actual, on="team_id", how="left"))
+        merged = odds.merge(actual, on="team_id", how="left")
+        frames.append(merged)
+        # Reordered to the merged frame's row order so a simulated season lines up
+        # with the stated probabilities column for column.
+        col = {int(t): i for i, t in enumerate(proj.teams)}
+        sims.append(proj.made_playoffs[:, [col[int(t)] for t in merged.team_id]])
         logger.info("season {} projected from {}: {} rows", season, cut, len(odds))
-    return pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True), sims
 
 
-def calibration_slope(probs: np.ndarray, outcomes: np.ndarray) -> tuple[float, float]:
+def backtest(*args, **kwargs) -> pd.DataFrame:
+    """:func:`backtest_detail` without the per-season simulated outcomes."""
+    return backtest_detail(*args, **kwargs)[0]
+
+
+def calibration_slope(probs: np.ndarray, outcomes: np.ndarray) -> float:
     """Slope of outcome on logit(p) — 1 is calibrated, below 1 is overconfident.
 
     Reliability bins say *where* a forecast is off; this says *how* in one number a
-    recalibration could act on. Returned with its standard error, because on ninety
-    team-seasons the error is the part that matters.
+    recalibration could act on.
+
+    Fitted with a weak ridge penalty rather than plain maximum likelihood. An
+    unpenalised logit diverges under perfect separation, which a plain fit hits
+    routinely inside :func:`slope_null_distribution` — a simulated season whose
+    qualifiers happen to be exactly the most-favoured clubs is a perfectly ordered
+    sample. The penalty is far too weak to matter when the fit is identified, and
+    it is applied to the observed and simulated slopes alike, so the comparison
+    between them is like for like.
     """
-    import statsmodels.api as sm
+    from sklearn.linear_model import LogisticRegression
 
     p = np.clip(np.asarray(probs, dtype=float), 1e-3, 1 - 1e-3)
-    z = np.log(p / (1 - p))
+    z = np.log(p / (1 - p)).reshape(-1, 1)
     y = np.asarray(outcomes, dtype=float)
     if y.sum() in (0, len(y)):
-        return float("nan"), float("nan")
-    fit = sm.Logit(y, sm.add_constant(z)).fit(disp=0)
-    return float(fit.params[1]), float(fit.bse[1])
+        return float("nan")
+    fit = LogisticRegression(C=1e4, solver="lbfgs", max_iter=1000).fit(z, y)
+    return float(fit.coef_[0][0])
+
+
+def slope_null_distribution(
+    sim_outcomes: list[np.ndarray], stated: np.ndarray, n_draws: int = 2000, seed: int = 0
+) -> np.ndarray:
+    """Slopes obtained when a *simulated* season is scored as if it were the truth.
+
+    The reason this exists: team-seasons are not independent observations. Exactly
+    twelve clubs per league qualify, so one club's success is another's failure, and
+    a binomial test that treats 120 team-seasons as 120 coin flips overstates its
+    own significance. Sampling whole simulated seasons preserves that constraint —
+    and every other structure in the projection — for free, because each draw *is* a
+    season the model considers possible.
+
+    ``sim_outcomes`` is one ``(n_sims, n_teams)`` boolean array per season, ordered to
+    match ``stated``. The returned distribution is what a perfectly calibrated
+    forecast of this sample size looks like; a slope below 1 there is measurement
+    noise, not overconfidence.
+    """
+    rng = np.random.default_rng(seed)
+    draws = np.empty(n_draws)
+    for b in range(n_draws):
+        truth = np.concatenate([s[rng.integers(len(s))] for s in sim_outcomes]).astype(float)
+        draws[b] = calibration_slope(stated, truth)
+    return draws
+
+
+def estimate_rating_sd(
+    seasons: list[int],
+    as_of: tuple[int, int] = (9, 1),
+    grid: np.ndarray | None = None,
+    n_sims: int = 4000,
+) -> tuple[float, pd.DataFrame]:
+    """Scale of the per-club strength error, matched to observed win-total error.
+
+    Method of moments on a quantity that has nothing to do with playoff outcomes:
+    how far final win totals land from their projection. At the right ``rating_sd``
+    the projection's own spread (``sim_win_sd``) equals the spread of the realised
+    errors. Deliberately *not* tuned on the calibration slope — fitting the knob to
+    the number it is meant to be judged by would guarantee a good score and prove
+    nothing.
+
+    Returns the interpolated crossing point and the grid it was read off.
+    """
+    grid = np.array([0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30]) if grid is None else grid
+    rows = []
+    for sd in grid:
+        res = backtest(seasons, as_of=as_of, n_sims=n_sims, rating_sd=float(sd))
+        err = (res.actual_wins - res.proj_wins).to_numpy(dtype=float)
+        rows.append(
+            {
+                "rating_sd": float(sd),
+                "sim_sd": float(res.sim_win_sd.mean()),
+                "obs_sd": err.std(ddof=1),
+            }
+        )
+    table = pd.DataFrame(rows)
+    gap = table.sim_sd - table.obs_sd
+    if (gap > 0).all() or (gap < 0).all():
+        logger.warning("rating_sd grid does not bracket the crossing; widen it")
+        return float(table.rating_sd.iloc[int(gap.abs().idxmin())]), table
+    # First crossing, linearly interpolated.
+    k = int(np.flatnonzero(np.sign(gap.to_numpy()[:-1]) != np.sign(gap.to_numpy()[1:]))[0])
+    lo, hi = table.rating_sd[k], table.rating_sd[k + 1]
+    return float(lo + (hi - lo) * (-gap[k]) / (gap[k + 1] - gap[k])), table
 
 
 def calibration_summary(results: pd.DataFrame) -> pd.DataFrame:
@@ -209,7 +294,7 @@ def calibration_summary(results: pd.DataFrame) -> pd.DataFrame:
         y = results[col].to_numpy(dtype=float)
         b = brier_score(p, y)
         b0 = brier_score(np.full_like(p, base), y)
-        slope, se = calibration_slope(p, y)
+        slope = calibration_slope(p, y)
         rows.append(
             {
                 "claim": name,
@@ -221,7 +306,6 @@ def calibration_summary(results: pd.DataFrame) -> pd.DataFrame:
                 "skill": 1 - b / b0,
                 "log_loss": log_loss(p, y),
                 "slope": slope,
-                "slope_se": se,
             }
         )
     return pd.DataFrame(rows)
@@ -270,7 +354,7 @@ def main(
     month: int = typer.Option(9, "--month"),
     day: int = typer.Option(1, "--day"),
 ) -> None:
-    results = backtest(seasons, as_of=(month, day), n_sims=n_sims)
+    results, sims = backtest_detail(seasons, as_of=(month, day), n_sims=n_sims)
 
     print(f"\nPLAYOFF ODDS CALIBRATION — projected from {month}/{day}, seasons {seasons}\n")
     print(calibration_summary(results).round(4).to_string(index=False))
@@ -280,6 +364,20 @@ def main(
     print("\nWin totals")
     for k, v in win_total_summary(results).items():
         print(f"  {k:<22}{v:.3f}")
+
+    # A slope below 1 is not by itself evidence of overconfidence: on a sample this
+    # size, with mostly extreme probabilities, the estimator is biased high even for
+    # a perfectly calibrated forecast. The null says what "calibrated" looks like here.
+    stated = results.playoff_pct.to_numpy() / 100
+    observed = calibration_slope(stated, results.made_playoffs.to_numpy(dtype=float))
+    null = slope_null_distribution(sims, stated)
+    print("\nIs the playoff slope actually miscalibrated?")
+    print(f"  observed slope        {observed:.3f}")
+    print(
+        f"  calibrated null       {null.mean():.3f} "
+        f"[{np.percentile(null, 2.5):.3f}, {np.percentile(null, 97.5):.3f}]"
+    )
+    print(f"  p(null <= observed)   {np.mean(null <= observed):.3f}")
 
     # The misses worth looking at: confident calls that went the other way.
     results["playoff_miss"] = (results.playoff_pct / 100 - results.made_playoffs).abs()
