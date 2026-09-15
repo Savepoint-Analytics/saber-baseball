@@ -138,6 +138,33 @@ def cached_get(
     return data
 
 
+def cached_get_bytes(
+    url: str,
+    *,
+    source: str,
+    params: dict[str, Any] | None = None,
+    force: bool = False,
+) -> bytes:
+    """Rate-limited, cached, retried GET returning raw bytes.
+
+    The sibling of :func:`cached_get` for non-JSON payloads (CSV, zip, HTML). Kept
+    separate rather than folded in because the JSON variant caches decoded objects
+    and this one must round-trip bytes untouched — a CSV with a UTF-8 BOM has to
+    reach the caller byte-identical for the decoder to strip it correctly.
+    """
+    cache_key = f"BYTES:{url}?{json.dumps(params or {}, sort_keys=True)}"
+    path = _cache_path(cache_key).with_suffix(".bin")
+    if not force and _cache_fresh(path):
+        logger.debug("[{}] cache hit (bytes): {}", source, url)
+        return path.read_bytes()
+
+    get_limiter(source).acquire()
+    logger.info("[{}] GET {}", source, url)
+    resp = _do_request("GET", url, params=params)
+    path.write_bytes(resp.content)
+    return resp.content
+
+
 def with_backoff(func: Any) -> Any:
     """Decorator: exponential backoff/retry for library-mediated pulls."""
     return retry(

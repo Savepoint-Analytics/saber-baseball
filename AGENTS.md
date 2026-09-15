@@ -4,7 +4,7 @@
 > Aider, etc.). Derived from `COMPANY_CONTEXT.md`, `PROJECT_CONTEXT.md`, `CLAUDE.md`,
 > `registry.md`, and `public-data-sources.md`. Follows the `AGENTS.md` convention.
 > If anything here conflicts with `CLAUDE.md`, `CLAUDE.md` wins for Claude.
-> **Last updated:** 2026-06-28
+> **Last updated:** 2026-08-31
 
 ---
 
@@ -23,7 +23,7 @@ real, so **data licensing is a first-class constraint.**
 uv sync                       # install from pyproject + uv.lock
 source .venv/bin/activate
 
-# Bring up local infra on Savepoint-Lab (Postgres + MinIO + Dagster)
+# Bring up local infra on Savepoint-Lab (Postgres + MinIO + Prefect)
 docker compose up -d
 
 # Run data quality + unit tests
@@ -41,7 +41,7 @@ Rscript -e 'renv::restore()'
 - **Python ≥ 3.11**, managed by **uv**. R via **renv** for `baseballr` only.
 - **Polars/pandas + PyArrow/Parquet**; **DuckDB** for OLAP over Parquet.
 - **PostgreSQL** = curated warehouse; **MinIO** = raw object store.
-- **dbt** transforms (bronze → silver → gold); **Dagster** orchestration.
+- **dbt** transforms (bronze → silver → gold); **Prefect** orchestration.
 - **scikit-learn / XGBoost / LightGBM / statsmodels**; **PyMC/bambi** for Bayesian.
 - **Pandera** validation; **MLflow** tracking; **ruff / mypy / pytest** quality gates.
 

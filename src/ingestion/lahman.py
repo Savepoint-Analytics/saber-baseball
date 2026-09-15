@@ -4,11 +4,18 @@ Compliance: Lahman is CC BY-SA 3.0 — commercial use OK with attribution. We do
 redistribute the raw tables as a dataset; we land them in our private bronze zone for
 internal modeling and ship only derived analysis. (See ``public-data-sources.md``.)
 
-Implementation note: we download the Chadwick Bureau's ``baseballdatabank`` archive
-ourselves rather than via ``pybaseball.lahman``. pybaseball 2.2.7 hardcodes the repo's
-old ``master.zip`` URL, which now 404s (the repo's default branch was renamed to
-``main``) and yields a ``BadZipFile`` — see pybaseball issue #391. Fetching the archive
-directly keeps us in control of the URL, our own cache, and the core/contrib paths.
+**Source note (2026-08-31).** The Chadwick Bureau's ``baseballdatabank`` GitHub repo,
+which this module used to download, now returns 404 — the repo is gone, so every
+candidate archive URL (``main``, ``master``, and the GitHub-API-resolved default
+branch) 404s and the ingest hard-fails. The database is now published by **SABR** at
+<https://sabr.org/lahman-database/>, which links Box-hosted downloads; version 2025
+(released 2026-01-02) covers 1871-2025. The only surviving GitHub mirror found
+(``xorq-labs/baseballdatabank``) stops at 2021, which is too stale to project a
+current season from, so we read SABR's copy.
+
+The Box file ids change with each annual release, so nothing here hard-codes one: we
+read the SABR page, follow its "Comma-delimited version" link, and index the shared
+folder by filename at run time.
 
 Run::
 
@@ -20,137 +27,136 @@ from __future__ import annotations
 
 import io
 import os
-import zipfile
-from pathlib import Path
+import re
 
 import pandas as pd
-import requests
 import typer
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.compliance.attributions import Source
-from src.config import settings
 from src.ingestion._storage import bronze_key, write_parquet
+from src.ingestion._throttle import cached_get_bytes
+from src.schemas.bronze import validate_lahman_teams
 
 app = typer.Typer(add_completion=False, help="Ingest Lahman season-level tables.")
 
-# Chadwick Bureau baseballdatabank = the maintained Lahman database (CC BY-SA 3.0).
-_REPO = "chadwickbureau/baseballdatabank"
-_API_REPO = f"https://api.github.com/repos/{_REPO}"
-_ARCHIVE_TMPL = "https://github.com/{repo}/archive/refs/heads/{branch}.zip"
+_SABR_PAGE = "https://sabr.org/lahman-database/"
+_BOX_DOWNLOAD = "https://sabr.app.box.com/index.php"
 
+# Tables needed for roster-aware projection work: team records, player identity,
+# and season-level batting/pitching/fielding lines.
+DEFAULT_TABLES = ["Teams", "People", "Batting", "Pitching", "Fielding", "Salaries"]
 
-def _candidate_urls() -> list[str]:
-    """Archive URLs to try, in order.
-
-    1. Full override via ``SABER_LAHMAN_ARCHIVE_URL`` (zip URL or local file path).
-    2. The repo's *current* default branch, resolved from the GitHub API — so this
-       keeps working regardless of any future master/main rename.
-    3. Static fallbacks (``main`` then ``master``) if the API is unreachable.
-    """
-    override = os.getenv("SABER_LAHMAN_ARCHIVE_URL")
-    urls: list[str] = [override] if override else []
-    try:
-        meta = requests.get(
-            _API_REPO, headers={"User-Agent": settings.user_agent}, timeout=30
-        ).json()
-        default_branch = meta.get("default_branch")
-        if default_branch:
-            urls.append(_ARCHIVE_TMPL.format(repo=_REPO, branch=default_branch))
-    except Exception as exc:  # API blocked/offline — fall back to static guesses.
-        logger.warning("Lahman: could not resolve default branch via API: {}", exc)
-    for branch in ("main", "master"):
-        url = _ARCHIVE_TMPL.format(repo=_REPO, branch=branch)
-        if url not in urls:
-            urls.append(url)
-    return urls
-
-
-DEFAULT_TABLES = ["Teams", "People", "Batting", "Pitching", "Fielding"]
-
-# Logical table -> CSV basename. Files live under core/ or contrib/ in the archive;
-# we search both so we don't hard-code which folder a table lives in.
-_TABLE_FILES: dict[str, str] = {
-    "Teams": "Teams.csv",
-    "People": "People.csv",
-    "Batting": "Batting.csv",
-    "Pitching": "Pitching.csv",
-    "Fielding": "Fielding.csv",
-    "Salaries": "Salaries.csv",
-    "AwardsPlayers": "AwardsPlayers.csv",
-    "AllstarFull": "AllstarFull.csv",
+# Floors that catch a truncated or placeholder download. This module previously left
+# 1-2 row stub files in bronze that read as "present" to every downstream check, so a
+# broken pull looked exactly like a healthy one. Better to fail the ingest than to
+# publish a mart built on two rows.
+_MIN_ROWS: dict[str, int] = {
+    "Teams": 2500,
+    "People": 15000,
+    "Batting": 90000,
+    "Pitching": 40000,
+    "Fielding": 100000,
+    "Salaries": 20000,
 }
+_DEFAULT_MIN_ROWS = 100
 
 
-@retry(wait=wait_exponential(multiplier=1, min=2, max=60), stop=stop_after_attempt(5), reraise=True)
-def _download_archive() -> bytes:
-    """Fetch the baseballdatabank zip, raising clearly if none is a real zip.
+def _shared_name() -> str:
+    """Resolve the Box shared-link id for the comma-delimited Lahman release.
 
-    Honors a local-file override: if ``SABER_LAHMAN_ARCHIVE_URL`` points at an existing
-    file, read it directly (handy for fully-offline / air-gapped reproducible runs).
+    ``SABER_LAHMAN_SHARED_NAME`` pins a specific release; otherwise we scrape the one
+    link off the SABR page. Scraping a single page once per cache TTL is well inside
+    polite use, and it means next January's release is picked up without a code change.
     """
-    headers = {"User-Agent": settings.user_agent}
-    last_err: Exception | None = None
-    for url in _candidate_urls():
-        if os.path.exists(url):  # local file override
-            data = Path(url).read_bytes()
-            if data[:2] == b"PK":
-                logger.info("Lahman: using local archive {}", url)
-                return data
-            last_err = RuntimeError(f"local file {url} is not a zip")
-            continue
-        logger.info("Lahman: downloading {}", url)
-        resp = requests.get(url, headers=headers, timeout=120)
-        if resp.status_code == 200 and resp.content[:2] == b"PK":
-            return resp.content
-        last_err = RuntimeError(
-            f"{url} returned status={resp.status_code}, "
-            f"content-type={resp.headers.get('content-type')!r} (not a zip)"
+    override = os.getenv("SABER_LAHMAN_SHARED_NAME")
+    if override:
+        return override
+
+    html = cached_get_bytes(_SABR_PAGE, source="sabr").decode("utf-8", errors="replace")
+    # The page lists SQL / Access / comma-delimited variants; we want the CSV one.
+    match = re.search(
+        r'<a href="https://sabr\.box\.com/s/([A-Za-z0-9]+)"[^>]*>\s*Comma-delimited version',
+        html,
+    )
+    if not match:
+        raise RuntimeError(
+            f"Could not find the comma-delimited Lahman link on {_SABR_PAGE}. "
+            "Set SABER_LAHMAN_SHARED_NAME to the Box shared id to override."
         )
-        logger.warning("Lahman: {} not usable ({})", url, last_err)
-    raise RuntimeError(f"Could not download a valid baseballdatabank archive: {last_err}")
+    return match.group(1)
 
 
-def _cached_archive() -> zipfile.ZipFile:
-    """Return the archive as a ZipFile, caching the raw zip under the data cache dir."""
-    settings.cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = Path(settings.cache_dir) / "baseballdatabank.zip"
-    if not cache_file.exists() or cache_file.stat().st_size == 0:
-        cache_file.write_bytes(_download_archive())
-        logger.debug("Lahman: cached archive -> {}", cache_file)
-    return zipfile.ZipFile(io.BytesIO(cache_file.read_bytes()))
+def _folder_index(shared_name: str) -> dict[str, str]:
+    """Map ``filename -> Box file id`` for the shared release folder."""
+    url = f"https://sabr.app.box.com/s/{shared_name}"
+    html = cached_get_bytes(url, source="sabr").decode("utf-8", errors="replace")
+
+    index: dict[str, str] = {}
+    for m in re.finditer(r'"typedID":"(f_\d+)"', html):
+        window = html[m.end() : m.end() + 600]
+        name = re.search(r'"name":"([^"]+)"', window)
+        if name and name.group(1).endswith(".csv"):
+            index.setdefault(name.group(1), m.group(1))
+    if not index:
+        raise RuntimeError(f"No CSV files found in Lahman release folder {url}")
+    logger.debug("Lahman: release folder indexes {} csv files", len(index))
+    return index
 
 
-def _read_table(zf: zipfile.ZipFile, table: str) -> pd.DataFrame:
-    """Read a logical table's CSV from the archive (searching core/ and contrib/)."""
-    fname = _TABLE_FILES.get(table)
-    if fname is None:
-        raise ValueError(f"Unknown Lahman table: {table!r}. Known: {sorted(_TABLE_FILES)}")
-    matches = [
-        n for n in zf.namelist() if n.endswith(f"/core/{fname}") or n.endswith(f"/contrib/{fname}")
-    ]
-    if not matches:
-        # Fall back to any path ending in the filename (layout drift safety net).
-        matches = [n for n in zf.namelist() if n.endswith(f"/{fname}")]
-    if not matches:
-        raise FileNotFoundError(
-            f"{fname} not found in baseballdatabank archive for table {table!r}"
+def _download_csv(shared_name: str, file_id: str) -> bytes:
+    return cached_get_bytes(
+        _BOX_DOWNLOAD,
+        source="sabr",
+        params={
+            "rm": "box_download_shared_file",
+            "shared_name": shared_name,
+            "file_id": file_id,
+        },
+    )
+
+
+def _read_table(table: str, shared_name: str, index: dict[str, str]) -> pd.DataFrame:
+    """Download and parse one logical table, enforcing its row floor."""
+    fname = f"{table}.csv"
+    if fname not in index:
+        raise FileNotFoundError(f"{fname} not in the Lahman release. Available: {sorted(index)}")
+
+    raw = _download_csv(shared_name, index[fname])
+    if not raw:
+        raise RuntimeError(f"Lahman {table}: empty download for {fname}")
+    # SABR re-published several CSVs with UTF-8 byte-order marks in Feb 2026;
+    # utf-8-sig strips one if present and is a no-op if not, so the first column
+    # name does not silently become "﻿yearID" and break every downstream join.
+    df = pd.read_csv(io.BytesIO(raw), encoding="utf-8-sig")
+
+    floor = _MIN_ROWS.get(table, _DEFAULT_MIN_ROWS)
+    if len(df) < floor:
+        raise RuntimeError(
+            f"Lahman {table}: got {len(df)} rows, expected >= {floor}. "
+            "Refusing to land a truncated table (see module docstring)."
         )
-    with zf.open(matches[0]) as fh:
-        return pd.read_csv(fh)
+    return df
 
 
 def ingest(tables: list[str] | None = None) -> list[str]:
     """Pull each Lahman table and land it as Parquet in bronze. Returns written keys."""
     tables = tables or DEFAULT_TABLES
-    zf = _cached_archive()
+    shared_name = _shared_name()
+    index = _folder_index(shared_name)
+    logger.info("Lahman: release {} ({} csv files)", shared_name, len(index))
+
     written: list[str] = []
     for table in tables:
         logger.info("Lahman: loading {}", table)
-        df = _read_table(zf, table)
+        df = _read_table(table, shared_name, index)
+        # Teams gates through Pandera — it is the table the warehouse actually joins
+        # to, so a schema drift there is the one most worth catching at the door.
+        if table == "Teams":
+            validate_lahman_teams(df)
         key = bronze_key("lahman", f"table={table}", f"{table}.parquet")
         written.append(write_parquet(df, key, sources=[Source.LAHMAN]))
+        logger.success("Lahman {}: {} rows", table, len(df))
     return written
 
 

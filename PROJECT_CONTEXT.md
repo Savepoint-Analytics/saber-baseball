@@ -2,7 +2,7 @@
 
 > **Vertical:** Sports → Baseball (MLB Sabermetrics)
 > **Inherits:** `../../COMPANY_CONTEXT.md`
-> **Last updated:** 2026-06-28
+> **Last updated:** 2026-08-31
 
 ---
 
@@ -73,9 +73,11 @@ scaffolding) is complete: context files, dependency & data-source registries, st
 architecture, and the project skeleton all exist in the `saber-baseball` repo. The
 repo now ships working, compliant bronze-layer pullers for Statcast, Retrosheet,
 Lahman, Chadwick, and the MLB Stats API (shared rate-limit + cache + backoff;
-auto-stamped attributions; Pandera schema gates). Models/features/simulation remain
-documented stubs. Next: land Pandera-validated silver tables in Postgres and wire dbt
-+ Dagster end to end.
+auto-stamped attributions; Pandera schema gates). Prefect now chains ingestion → dbt → Postgres
+end to end, and **Phase 3 baselines are implemented and backtested**
+(`src/models/baselines.py`, `src/models/backtest.py`): Elo sets the bar at 0.6788
+log-loss over 2017-2026. Features and simulation remain documented stubs. Next:
+Statcast-derived features and a model that beats Elo.
 
 ## 7. Modeling approach (intended)
 

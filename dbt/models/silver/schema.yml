@@ -24,3 +24,163 @@ models:
                 values: [0, 1]
               config:
                 where: "home_win is not null"
+
+  - name: sv_statcast_team_game
+    description: >
+      Per-team Statcast summary of a single game (offence created / defence allowed).
+      Grain is (game_pk, team_id); joined to the spine on game_pk, never on date.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, team_id]
+    columns:
+      - name: game_pk
+        tests: [not_null]
+      - name: team_id
+        tests: [not_null]
+      - name: off_pa
+        description: "Plate appearances by this team in this game."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                max_value: 120
+
+  - name: sv_statcast_pitcher_game
+    description: >
+      Per-pitcher summary of a single game, split by times through the order.
+      Grain is (game_pk, pitcher). TTO is counted exactly (this batter vs this
+      pitcher), not approximated as plate-appearances/9.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, pitcher]
+    columns:
+      - name: game_pk
+        tests: [not_null]
+      - name: pitcher
+        tests: [not_null]
+      - name: xwoba_allowed
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 4, inclusive: true}
+      - name: batters_faced
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 60, inclusive: true}
+
+  - name: sv_statcast_bullpen_game
+    description: >
+      Relief pitching per (game_pk, team_id). xwOBA is weighted by batters faced.
+      A team with no row used no relievers in that game.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, team_id]
+    columns:
+      - name: relief_bf
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 60, inclusive: true}
+
+  - name: sv_plate_appearances
+    description: >
+      One row per plate appearance with base-out state before and after and runs
+      produced. Foundation for run expectancy and the PA simulation engine.
+      Grain is (game_pk, at_bat_number).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, at_bat_number]
+    columns:
+      - name: outcome
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["K", "BB", "HBP", "1B", "2B", "3B", "HR", "ROE", "OUT"]
+      - name: pitch_family
+        description: "Family of the pitch that ended the PA; null for unclassified types."
+        tests:
+          - accepted_values:
+              arguments: {values: ["fastball", "breaking", "offspeed"]}
+              config: {where: "pitch_family is not null"}
+      - name: outs_before
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 2, inclusive: true}
+      - name: outs_after
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 3, inclusive: true}
+      - name: runs_on_play
+        description: >
+          Runs scoring during this PA, measured first pitch to last so mid-PA runs
+          (wild pitch, steal of home) are included. Can exceed 4: a run on a wild
+          pitch followed by a grand slam is 5.
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 6, inclusive: true}
+      - name: state_before
+        description: "Canonical base-out state 0-23 (outs*8 + base code)."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 23, inclusive: true}
+
+  - name: sv_lineup_slots
+    description: >
+      Batting-order slot and pitcher-stint context per plate appearance. Slot is
+      derived by rule (k-th PA of the game is slot ((k-1) mod 9)+1).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, at_bat_number]
+    columns:
+      - name: batting_slot
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 9, inclusive: true}
+      - name: pitcher_bf
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 60, inclusive: true}
+
+  - name: sv_pitching_changes
+    description: >
+      Every relief appearance with the score margin when it began. Grain is
+      (game_pk, pitcher, first_at_bat).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, pitcher, first_at_bat]
+    columns:
+      - name: leverage_band
+        tests:
+          - not_null
+          - accepted_values:
+              arguments: {values: ["close", "medium", "blowout"]}
+
+  - name: sv_teams
+    description: >
+      Team dimension per season (league, division, home venue). Keyed by season
+      because divisions are not static.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments: {combination_of_columns: [season, team_id]}
+    columns:
+      - name: division_name
+        tests: [not_null]
+
+  - name: sv_schedule
+    description: >
+      Full regular-season schedule including unplayed games. sv_games keeps only
+      completed games for training; this is what a season projection consumes.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments: {combination_of_columns: [game_pk]}
+    columns:
+      - name: is_played
+        tests: [not_null]
+      - name: is_remaining
+        tests: [not_null]
+

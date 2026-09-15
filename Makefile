@@ -11,8 +11,8 @@ BACKFILL_START ?= 2015
 BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
-        ingest-statcast ingest-retrosheet ingest-statsapi backfill dbt dbt-duckdb \
-        publish warehouse test lint fmt typecheck serve clean
+        ingest-statcast ingest-retrosheet ingest-statsapi ingest-teams backfill dbt dbt-duckdb \
+        publish sync-minio warehouse flows pipeline backtest sim-eval season season-backtest today test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -24,7 +24,7 @@ setup: ## Create venv + install all dependency groups
 sync: ## Install runtime deps only (Phase-1 ingestion)
 	uv sync
 
-infra-up: ## Start Postgres + MinIO + Dagster on Savepoint-Lab
+infra-up: ## Start Postgres + MinIO + Prefect on Savepoint-Lab
 	docker compose up -d
 
 infra-down: ## Stop the local stack
@@ -44,6 +44,9 @@ ingest-statcast: ## Pull a Statcast window (override START/END)
 ingest-retrosheet: ## Pull Retrosheet events for $(SEASON)
 	uv run python -m src.ingestion.retrosheet --season $(SEASON)
 
+ingest-teams: ## Pull the MLB team dimension (league/division) for $(SEASON)
+	uv run python -m src.ingestion.teams --season $(SEASON)
+
 ingest-statsapi: ## Pull MLB Stats API schedule for $(SEASON)
 	uv run python -m src.ingestion.statsapi --season $(SEASON)
 
@@ -51,16 +54,51 @@ backfill: ## Backfill schedules for BACKFILL_START..BACKFILL_END (default 2015..
 	uv run python -m src.ingestion.statsapi \
 		--start-season $(BACKFILL_START) --end-season $(BACKFILL_END)
 
+# dbt reads config from the environment, not from .env — without this it silently
+# falls back to every env_var() default (bucket `saber-bronze`, endpoint
+# `localhost:9000`) and a MinIO-backed build fails or, worse, reads the wrong data.
+# SABER_DATA_DIR is relative in .env, but dbt runs from dbt/, so it must be made
+# absolute here or a local-backend build looks for ./dbt/data/bronze and finds
+# nothing. Values already in the environment are overwritten by .env — .env is
+# the source of truth; change it there rather than prefixing the make call.
+ENVLOAD = set -a && . ./.env && SABER_DATA_DIR=$$(cd "$${SABER_DATA_DIR:-./data}" && pwd) && set +a
+
 dbt: ## Build dbt models against Postgres
-	cd dbt && uv run dbt build --target postgres
+	$(ENVLOAD) && cd dbt && uv run dbt build --target postgres
 
 dbt-duckdb: ## Build dbt bronze/silver models against DuckDB
-	cd dbt && uv run dbt build --target duckdb
+	$(ENVLOAD) && cd dbt && uv run dbt build --target duckdb
+
+sync-minio: ## Mirror the local bronze tree into MinIO on Savepoint-Lab
+	uv run python -m src.warehouse.sync_minio
 
 publish: ## Copy modeled silver/gold tables from DuckDB into the Postgres warehouse
 	uv run python -m src.warehouse.load_postgres
 
 warehouse: dbt-duckdb publish ## Transform in DuckDB, then publish results to Postgres
+
+# Prefect reads PREFECT_API_URL from the process environment, not from our settings
+# object, so these need .env exported the same way the dbt targets do.
+flows: ## Serve the scheduled Prefect deployment (long-running; Ctrl-C to stop)
+	$(ENVLOAD) && uv run python -m orchestration.flows
+
+pipeline: ## Run the full ingest -> dbt -> publish chain once, right now
+	$(ENVLOAD) && uv run python -c "from orchestration.flows import daily_pipeline; daily_pipeline()"
+
+today: ## Publishable predictions for today's slate + playoff odds
+	uv run python -m src.serving.daily_report
+
+season: ## Project the season to playoff & World Series odds
+	uv run python -m src.simulation.season --season $(SEASON)
+
+season-backtest: ## Score Sept-1 playoff odds for 2023-25 against what happened
+	uv run python -m src.models.backtest_season --seasons 2023 --seasons 2024 --seasons 2025
+
+sim-eval: ## Score the PA simulator against the classifiers on one metric
+	uv run python -m src.models.evaluate_simulator
+
+backtest: ## Walk-forward backtest of the baseline outcome models
+	uv run python -m src.models.backtest
 
 test: ## Run pytest
 	uv run pytest

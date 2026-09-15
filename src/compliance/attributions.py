@@ -42,8 +42,8 @@ ATTRIBUTIONS: dict[Source, str] = {
         "www.retrosheet.org."
     ),
     Source.LAHMAN: (
-        "Data from the Lahman Baseball Database, © 1996–2024 Sean Lahman, "
-        "licensed under CC BY-SA 3.0."
+        "Data from the Lahman Baseball Database (version 2025), © 1996–2026 "
+        "Sean Lahman, published by SABR, licensed under CC BY-SA 3.0."
     ),
     Source.STATCAST: "Includes data © MLB Advanced Media / Baseball Savant.",
     Source.MLB_STATS_API: "Includes data © MLB Advanced Media.",

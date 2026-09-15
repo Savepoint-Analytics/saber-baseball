@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,12 +32,35 @@ class Settings(BaseSettings):
     postgres_user: str = Field(default="saber", alias="POSTGRES_USER")
     postgres_password: str = Field(default="change-me", alias="POSTGRES_PASSWORD")
     postgres_db: str = Field(default="saber_baseball", alias="POSTGRES_DB")
+    # Savepoint-Lab runs ONE Postgres database (`sports`) shared by every vertical,
+    # so each vertical owns a schema rather than a database — tennis publishes into
+    # `tennis`, baseball into `baseball`. Publishing to bare `silver`/`gold` would
+    # collide the moment a second vertical did the same. `POSTGRES_SCHEMA` is the
+    # cross-vertical name; `POSTGRES_SC` is accepted because deployed .env files
+    # carry that truncated spelling, and silently reading nothing is exactly the
+    # failure this field exists to prevent.
+    postgres_schema: str = Field(
+        default="baseball",
+        validation_alias=AliasChoices("POSTGRES_SCHEMA", "POSTGRES_SC"),
+    )
 
     # ---- MinIO / S3 ---------------------------------------------------------
     minio_endpoint: str = Field(default="http://localhost:9000", alias="MINIO_ENDPOINT")
     minio_access_key: str = Field(default="saber", alias="MINIO_ROOT_USER")
     minio_secret_key: str = Field(default="change-me", alias="MINIO_ROOT_PASSWORD")
     minio_bucket: str = Field(default="saber-bronze", alias="MINIO_BUCKET")
+    # Savepoint-Lab shares ONE `sabermetrics` bucket across verticals (soccer already
+    # owns `soccer/`), so baseball namespaces itself with a key prefix — the object
+    # store's equivalent of the schema-per-vertical rule for Postgres above. Without
+    # it every bronze write lands in the bucket root and collides with the next
+    # vertical that does the same.
+    minio_prefix: str = Field(default="", alias="MINIO_PREFIX")
+
+    # ---- Orchestration ------------------------------------------------------
+    # Prefect is the Savepoint-wide orchestrator (registry.md §6). Inside Compose the
+    # prefect-flows service overrides this to the service name; on a dev box the
+    # localhost default points at `prefect server start`.
+    prefect_api_url: str = Field(default="http://localhost:4200/api", alias="PREFECT_API_URL")
 
     # ---- Ingestion politeness (compliance) ----------------------------------
     bbref_rpm: int = Field(default=18, alias="SABER_BBREF_RPM")
@@ -78,7 +101,9 @@ class Settings(BaseSettings):
         ``s3://bucket`` when backend=minio, else a local ``data/bronze`` path.
         """
         if self.storage_backend == "minio":
-            return f"s3://{self.minio_bucket}"
+            prefix = self.minio_prefix.strip("/")
+            root = f"s3://{self.minio_bucket}"
+            return f"{root}/{prefix}" if prefix else root
         return str((self.data_dir / "bronze").resolve())
 
     @property

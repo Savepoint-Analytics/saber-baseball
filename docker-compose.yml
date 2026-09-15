@@ -1,5 +1,5 @@
 # Savepoint-Lab local stack: PostgreSQL (curated warehouse) + MinIO (raw object
-# store) + Dagster (orchestration). Self-hosted, ~$0 recurring. Secrets come from
+# store) + Prefect (orchestration). Self-hosted, ~$0 recurring. Secrets come from
 # .env (git-ignored) — never commit real credentials. See CLAUDE.md §4.
 name: saber-baseball
 
@@ -58,25 +58,55 @@ services:
       echo 'bronze bucket ready';
       "
 
-  dagster:
+  # Prefect splits into two processes: the API/UI server, and a long-running
+  # process that serves the scheduled deployment. `dagster dev` bundled both, which
+  # is why this is two services where there used to be one.
+  prefect-server:
     build:
       context: .
-      dockerfile: Dockerfile.dagster
-    container_name: saber-dagster
+      dockerfile: Dockerfile.prefect
+    container_name: saber-prefect-server
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${PREFECT_PORT:-4200}:4200"
+    volumes:
+      # Prefect's own metadata (flow runs, schedules) lives in a SQLite file here.
+      # Deliberately NOT pointed at the `sports` Postgres: orchestrator bookkeeping
+      # is not analytics data, and mixing them would put churn-heavy internal tables
+      # in the warehouse every vertical's BI layer reads.
+      - prefectdata:/root/.prefect
+    command: prefect server start --host 0.0.0.0 --port 4200
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:4200/api/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  prefect-flows:
+    build:
+      context: .
+      dockerfile: Dockerfile.prefect
+    container_name: saber-prefect-flows
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
+      prefect-server:
+        condition: service_healthy
     env_file: .env
-    ports:
-      - "${DAGSTER_PORT:-3000}:3000"
+    environment:
+      # Overrides whatever .env carries: inside the network the API is reachable at
+      # the service name, not the localhost the host machine uses.
+      PREFECT_API_URL: http://prefect-server:4200/api
     volumes:
       - ./:/app
     working_dir: /app
-    command: dagster dev -h 0.0.0.0 -p 3000 -m orchestration.definitions
+    command: python -m orchestration.flows
 
 volumes:
   pgdata:
   miniodata:
+  prefectdata:

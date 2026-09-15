@@ -28,8 +28,13 @@ Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
 - `src/compliance/attributions.py` — canonical attribution strings, auto-stamped onto
   every export.
 - `src/schemas/` — Pandera schemas that gate ingested tables.
-- `dbt/`, `orchestration/`, `src/{features,models,simulation,serving}/` — scaffolded
-  with documented stubs for the later phases.
+- `orchestration/flows.py` — **Prefect** flows chaining ingestion → `dbt build` →
+  Postgres publish, on a 09:00 ET daily schedule.
+- `src/models/baselines.py` + `src/models/backtest.py` — **Phase 3 baselines**
+  (home-field, Log5, Pythagorean, Elo) and the walk-forward log-loss/calibration
+  harness. Elo sets the bar at **0.6788 log-loss**; see `docs/methodology.md`.
+- `dbt/`, `src/{features,simulation,serving}/` — scaffolded with documented stubs
+  for the later phases.
 
 ## Architecture at a glance
 
@@ -46,7 +51,7 @@ Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
             │   │ JSON, dated   │                └──────────────┘      │ Postgres │ │
             │   └───────────────┘                                      │ silver + │ │
             │                                                          │  gold    │ │
-            │   Dagster orchestrates all assets · MLflow tracks models └────┬─────┘ │
+            │   Prefect orchestrates every flow · MLflow tracks models  └────┬─────┘ │
             └──────────────────────────────────────────────────────────────┼───────┘
                                                                             ▼
                                               Models (sklearn/XGB/PyMC) · Sim engine
@@ -56,7 +61,7 @@ Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
 - **MinIO** = cheap raw landing zone (pitch-level Statcast, raw API JSON).
 - **PostgreSQL** = curated warehouse (dims, features, model outputs) for serving/BI.
 - **DuckDB** = fast OLAP over Parquet without bloating Postgres.
-- **dbt** = tested, documented bronze→silver→gold transforms. **Dagster** = orchestration.
+- **dbt** = tested, documented bronze→silver→gold transforms. **Prefect** = orchestration.
 
 See `CLAUDE.md` §4 for the full rationale (and why not Postgres-only or MinIO-only).
 
@@ -73,7 +78,7 @@ saber-baseball/
 ├── public-data-sources.md        # data catalog + ToS + attributions
 │
 ├── pyproject.toml                # uv-managed deps + lockfile (uv.lock)
-├── docker-compose.yml            # postgres + minio + dagster
+├── docker-compose.yml            # postgres + minio + prefect
 ├── .env.example                  # config template (never commit real .env)
 ├── .gitignore
 ├── Makefile                      # common commands (ingest, build, test, sim)
@@ -97,7 +102,7 @@ saber-baseball/
 │   └── serving/                  # Streamlit apps, report builders [stub]
 │
 ├── dbt/                          # dbt project (bronze → silver → gold)
-├── orchestration/                # Dagster definitions (assets, schedules)
+├── orchestration/                # Prefect flows (tasks, schedules)
 ├── r/                            # R-only tasks (renv); baseballr helpers
 ├── notebooks/                    # exploration ONLY — no production logic
 ├── tests/                        # pytest: transforms, models, Pandera schemas
@@ -113,7 +118,7 @@ uv sync && source .venv/bin/activate
 cp .env.example .env            # fill in Postgres + MinIO credentials
 
 # 2. Infra on Savepoint-Lab
-docker compose up -d            # postgres, minio, dagster
+docker compose up -d            # postgres, minio, prefect
 
 # 3. First pull (compliant: Retrosheet + Lahman + Chadwick + Statcast-derived)
 make ingest SEASON=2025
@@ -125,6 +130,17 @@ make test
 # 5. Explore
 make serve                      # streamlit run src/serving/app.py
 ```
+
+Orchestration (Prefect) runs the whole chain — ingest → dbt → publish — for you:
+
+```bash
+make pipeline                   # run the full chain once, right now
+make flows                      # serve the 09:00 ET daily schedule (long-running)
+```
+
+`docker compose up -d` also brings up the Prefect API/UI at
+<http://localhost:4200> (`PREFECT_PORT`) plus a `prefect-flows` service that serves
+the daily deployment.
 
 To try ingestion directly without Make:
 
@@ -151,9 +167,22 @@ make dbt-duckdb                          # bronze → silver → gold
 2. **Phase 1 — Ingestion (current):** compliant bronze pipelines (Statcast, Retrosheet,
    Lahman, Chadwick) into MinIO/Parquet; Pandera-validated silver in Postgres.
 3. **Phase 2 — Run expectancy & WPA:** RE24/WPA tables from Retrosheet events.
-4. **Phase 3 — Prediction:** baselines (home-field, Elo, Pythagorean, log5) →
-   gradient-boosted + Bayesian outcome models; backtest + calibration.
-5. **Phase 4 — Season simulation:** Monte-Carlo schedule → playoff & World Series odds.
+4. **Phase 3 — Prediction (in progress):** home-field, Elo, Pythagorean and log5 are
+   backtested (`make backtest`), plus Statcast team-form and **starting-pitcher**
+   models. Team form does not beat Elo; starter form (rolling xwOBA allowed, split by
+   times through the order) reaches 0.6769 vs Elo's 0.6781 and wins 6 of 7 seasons,
+   but is not yet statistically significant. Bullpen form and park/weather were also
+   tried and make it significantly **worse**. See `docs/methodology.md`.
+5. **Phase 4 — Season simulation (engine done, season sim next):** the
+   plate-appearance engine simulates complete games at ~7,100 games/sec — PA outcome
+   model (odds-ratio), base-out transition matrix, lineups, substitution policy and
+   home-field advantage. It reproduces league run scoring to within 1%, home-field
+   advantage to 0.2pp, and 1-run game frequency to 0.4pp. Park and weather are wired
+   in as per-game run multipliers, and day-to-day pitcher form as a per-outing one.
+   The engine remains ~6% under-dispersed: park/weather supply ~25% of the gap and
+   pitcher form ~5%, both measured rather than tuned (see `docs/methodology.md`).
+   Plain-language write-ups live in [`docs/explainers/`](docs/explainers/). Next:
+   Monte-Carlo the schedule → playoff & World Series odds.
 6. **Phase 5 — Counterfactuals:** perturb player rate inputs, re-simulate, surface
    improvement levers; package as affordable analysis products.
 

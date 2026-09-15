@@ -12,7 +12,11 @@ saber_baseball:
         - parquet
       # For MinIO-backed Parquet, set S3 settings so httpfs can read s3://saber-bronze.
       settings:
-        s3_endpoint: "localhost:9000"
+        # Derived from MINIO_ENDPOINT so the lab host is not hard-coded here. dbt
+        # wants host:port, MINIO_ENDPOINT carries a scheme, hence the strip. Note
+        # this must be the S3 API port (9000), not the console (9001) — MinIO
+        # rejects S3 calls made to the console port.
+        s3_endpoint: "{{ env_var('MINIO_ENDPOINT', 'http://localhost:9000') | replace('http://','') | replace('https://','') }}"
         s3_use_ssl: false
         s3_url_style: "path"
         s3_access_key_id: "{{ env_var('MINIO_ROOT_USER', 'saber') }}"

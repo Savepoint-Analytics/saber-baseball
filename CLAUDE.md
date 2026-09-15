@@ -3,7 +3,7 @@
 > Read order: `../../COMPANY_CONTEXT.md` → `PROJECT_CONTEXT.md` → this file.
 > This is the constitution for any AI agent working in the baseball vertical. The
 > tool-agnostic mirror of these rules lives in `AGENTS.md`.
-> **Last updated:** 2026-06-28
+> **Last updated:** 2026-08-31
 
 ---
 
@@ -30,7 +30,8 @@ data licensing so the output can be sold affordably and legally.
 - **Language:** Python ≥ 3.11, managed with **uv** (lockfile committed). R via **renv**.
 - **DataFrames:** Polars for large/pitch-level data; pandas where ecosystem requires it; Parquet + PyArrow for interchange.
 - **Transforms:** **dbt** models (medallion: bronze → silver → gold). SQL transforms are tested and documented.
-- **Orchestration:** **Dagster** assets (start with cron + Make if Dagster is overkill early).
+- **Orchestration:** **Prefect** flows (start with cron + Make if Prefect is overkill early).
+  Prefect is the orchestrator across *every* Savepoint vertical — see `registry.md` §6.
 - **Modeling:** scikit-learn / XGBoost / LightGBM / statsmodels; **PyMC / bambi** for Bayesian player rates. Track runs in **MLflow**.
 - **Validation:** **Pandera** schemas (or Great Expectations) gate every ingested table.
 - **Style:** `ruff` (lint+format), `mypy` for typed modules, `pytest` for tests. Notebooks are for exploration only — production logic lives in `src/`.
@@ -61,7 +62,17 @@ with DuckDB as the query engine.** Rationale documented so future agents underst
 - *Hybrid* gives cheap durable raw storage **and** a clean serving warehouse, all
   self-hosted (≈ $0 recurring) — directly serving the "affordable" mission.
 
-**Deploy:** Docker Compose on Savepoint-Lab running `postgres`, `minio`, `dagster`.
+**Namespacing (both stores are shared across verticals).** Savepoint-Lab runs one
+`sports` Postgres database *and* one `sabermetrics` MinIO bucket for every vertical.
+Baseball owns the `baseball` Postgres schema (`POSTGRES_SCHEMA`) and the `baseball/`
+key prefix (`MINIO_PREFIX`). Writing to a bare schema or the bucket root collides
+with soccer/tennis — silently, since neither store errors on it.
+
+**MinIO ports:** `9000` is the S3 API, `9001` is the web console. `MINIO_ENDPOINT`
+must point at 9000; MinIO rejects S3 calls made to the console port.
+
+**Deploy:** Docker Compose on Savepoint-Lab running `postgres`, `minio`, `prefect-server`,
+and `prefect-flows`.
 Back up Postgres (`pg_dump` to MinIO) and snapshot MinIO buckets. Keep secrets in
 `.env` (git-ignored); never commit credentials.
 
@@ -95,7 +106,7 @@ code comments when a rule shapes an implementation.
 - **Chadwick register** — ✅ open; use freely for ID crosswalks.
 
 **Code-license rules:**
-- **MIT deps (pybaseball, baseballr, mlbgame, DuckDB, dbt, Dagster…)** — ✅ commercial
+- **MIT deps (pybaseball, baseballr, mlbgame, DuckDB, dbt, Prefect…)** — ✅ commercial
   OK; retain copyright/license notices.
 - **GPLv3 (MLB-StatsAPI)** — ✅ as a runtime dependency for producing analysis. Do
   **not** bundle a modified copy inside a closed-source redistributed product. *Why:

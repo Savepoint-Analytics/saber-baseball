@@ -11,7 +11,9 @@ the required notice always travels with the raw landing zone.
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlparse
 
+import duckdb
 import pandas as pd
 from loguru import logger
 
@@ -25,6 +27,25 @@ def bronze_key(dataset: str, *parts: str) -> str:
     root = settings.bronze_root
     sep = "" if root.endswith("/") else "/"
     return f"{root}{sep}{suffix}"
+
+
+def bronze_exists(key: str) -> bool:
+    """Does this bronze object already exist, on either backend?
+
+    ``Path(key).exists()`` silently returns False for an ``s3://`` URI, so a
+    resumable backfill that used it re-pulled everything the moment the backend
+    switched to MinIO -- hours of rate-limited requests to re-fetch data already in
+    the bucket, with no error to indicate anything was wrong.
+    """
+    if not key.startswith("s3://"):
+        return Path(key).exists()
+    import s3fs
+
+    options = settings.s3_storage_options()
+    fs = s3fs.S3FileSystem(
+        key=options["key"], secret=options["secret"], client_kwargs=options["client_kwargs"]
+    )
+    return bool(fs.exists(key.removeprefix("s3://")))
 
 
 def write_parquet(df: pd.DataFrame, key: str, *, sources: list[Source]) -> str:
@@ -56,3 +77,33 @@ def _write_notice_s3(key: str, sources: list[Source], storage_options: dict) -> 
     notice_key = key.rsplit("/", 1)[0] + "/NOTICE.txt"
     with fs.open(notice_key, "w") as fh:
         fh.write(attribution_block(sources) + "\n")
+
+
+def bronze_duckdb() -> duckdb.DuckDBPyConnection:
+    """A DuckDB connection able to read the bronze layer on the current backend.
+
+    Reading bronze is not simply ``read_parquet`` once the backend is MinIO: DuckDB
+    needs httpfs loaded and an S3 secret, or the same query that works locally comes
+    back as an opaque 403. Anything that reads bronze should go through here rather
+    than calling ``duckdb.sql`` directly, so switching SABER_STORAGE_BACKEND stays a
+    one-line change instead of breaking callers one at a time.
+    """
+    con = duckdb.connect()
+    if settings.storage_backend != "minio":
+        return con
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute(
+        """
+        CREATE OR REPLACE SECRET bronze_s3 (
+            TYPE S3, KEY_ID $key, SECRET $secret,
+            ENDPOINT $endpoint, URL_STYLE 'path', USE_SSL $use_ssl
+        )
+        """,
+        {
+            "key": settings.minio_access_key,
+            "secret": settings.minio_secret_key,
+            "endpoint": urlparse(settings.minio_endpoint).netloc,
+            "use_ssl": settings.minio_endpoint.startswith("https"),
+        },
+    )
+    return con
