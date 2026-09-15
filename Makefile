@@ -12,7 +12,8 @@ BACKFILL_END ?= $(shell date +%Y)
 
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
         ingest-statcast ingest-retrosheet ingest-statsapi ingest-teams backfill dbt dbt-duckdb \
-        publish sync-minio warehouse flows pipeline backtest sim-eval season season-backtest today test lint fmt typecheck serve clean
+        publish sync-minio warehouse flows pipeline backtest sim-eval season season-backtest today \
+        player-value test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -87,6 +88,9 @@ pipeline: ## Run the full ingest -> dbt -> publish chain once, right now
 
 today: ## Publishable predictions for today's slate + playoff odds
 	uv run python -m src.serving.daily_report
+
+player-value: ## Player value leaders for $(SEASON) (PLAYER=<mlbam id> for one card)
+	uv run python -m src.features.player_value --season $(SEASON) $(if $(PLAYER),--player $(PLAYER),)
 
 season: ## Project the season to playoff & World Series odds
 	uv run python -m src.simulation.season --season $(SEASON)

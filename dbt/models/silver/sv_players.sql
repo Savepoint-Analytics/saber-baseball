@@ -28,7 +28,8 @@
 -- Fielding table. Career rather than most-recent because a player's role is
 -- what a value card should lead with, and the Fielding table stops at the last
 -- Lahman release anyway; modern Lahman records outfielders as 'OF', not LF/CF/RF.
--- Null for players Lahman has not yet catalogued.
+-- Lahman has no DH row, so a full-time DH is labelled by whatever he last
+-- fielded -- Ohtani reads 'P'. Null for players Lahman has not yet catalogued.
 --
 -- Chadwick uses -1 as its "no id" sentinel. Rows with no MLBAM id are dropped
 -- (they cannot join to anything here) and other -1 keys are nulled.

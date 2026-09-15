@@ -17,24 +17,33 @@ coaching, player analysis, and prediction — and prove that Savepoint's multi-v
 analytics platform works end to end. Priority: **game-outcome prediction first**, then
 player/team analysis, then season projection, then counterfactual simulation.
 
-## Current status — Phase 1 (ingestion)
+## Current status — Phases 1, 3 and 4 done; Phase 2 started (as of 2026-09-15)
 
-Phase 0 (foundations/scaffolding) is complete. This checkout ships a working,
-**compliant** bronze-layer ingestion stack:
+Phase 0 (foundations) and Phase 1 (ingestion) are complete, and the work ran ahead
+of the roadmap's order: prediction (Phase 3) and season simulation (Phase 4) are built
+and backtested, and player evaluation (Phase 2) has its first marts. What this
+checkout ships:
 
-- `src/ingestion/` — runnable pullers for **Statcast**, **Retrosheet**, **Lahman**,
-  **Chadwick**, and the **MLB Stats API**, all routed through a shared rate-limit +
-  on-disk cache + backoff layer (`_throttle.py`).
+- `src/ingestion/` — compliant pullers for **Statcast**, **Retrosheet**, **Lahman**,
+  **Chadwick**, the **MLB Stats API** and the team dimension, through a shared
+  rate-limit + on-disk cache + backoff layer (`_throttle.py`). 8.2M pitches,
+  2015–2026, land in MinIO on Savepoint-Lab.
+- `dbt/` — bronze → silver → gold in DuckDB, 168 tests; `src/warehouse/` publishes
+  the curated marts into the `baseball` schema of the shared `sports` Postgres.
+  `orchestration/flows.py` runs ingest → dbt → publish daily at 09:00 ET (Prefect).
+- `src/models/` — nine outcome-model families, walk-forward backtested. **Elo is still
+  the bar** (0.6781 log-loss); Elo + starter form reaches 0.6769, 6 of 7 seasons, not
+  yet significant. Playoff odds are calibration-tested and carry their caveat.
+- `src/simulation/` — the plate-appearance engine (~7,100 games/sec), season
+  projection to playoff/World Series odds, rating uncertainty propagated.
+- `src/features/` + the player marts — **RE24 per player-season**, season linear
+  weights, `gd_batter_season` / `gd_pitcher_season` with park-adjusted runs above
+  average, and `sv_players` (Chadwick + Lahman + Statcast). `make player-value`
+  prints leaders or a value card that shows raw production next to shrunk talent.
+- `src/serving/daily_report.py` — today's win probabilities, projected scores and
+  playoff odds, attribution-stamped (`make today`).
 - `src/compliance/attributions.py` — canonical attribution strings, auto-stamped onto
-  every export.
-- `src/schemas/` — Pandera schemas that gate ingested tables.
-- `orchestration/flows.py` — **Prefect** flows chaining ingestion → `dbt build` →
-  Postgres publish, on a 09:00 ET daily schedule.
-- `src/models/baselines.py` + `src/models/backtest.py` — **Phase 3 baselines**
-  (home-field, Log5, Pythagorean, Elo) and the walk-forward log-loss/calibration
-  harness. Elo sets the bar at **0.6788 log-loss**; see `docs/methodology.md`.
-- `dbt/`, `src/{features,simulation,serving}/` — scaffolded with documented stubs
-  for the later phases.
+  every export. `src/schemas/` — Pandera schemas gating ingested tables.
 
 ## Architecture at a glance
 
@@ -96,10 +105,10 @@ saber-baseball/
 │   ├── compliance/
 │   │   └── attributions.py       # canonical attributions, auto-stamped on exports
 │   ├── schemas/                  # Pandera schemas gating ingested tables
-│   ├── features/                 # feature engineering (RE, WPA, matchups) [stub]
-│   ├── models/                   # outcome, team-strength, Bayesian rates [stub]
-│   ├── simulation/               # PA-level Markov / Monte-Carlo engine [stub]
-│   └── serving/                  # Streamlit apps, report builders [stub]
+│   ├── features/                 # RE24 mirror, player value cards (WPA not yet)
+│   ├── models/                   # baselines, outcome models, backtests, playoff calibration
+│   ├── simulation/               # PA-level engine, season projection
+│   └── serving/                  # daily prediction report; Streamlit shell
 │
 ├── dbt/                          # dbt project (bronze → silver → gold)
 ├── orchestration/                # Prefect flows (tasks, schedules)
@@ -127,8 +136,10 @@ make ingest SEASON=2025
 make warehouse                  # dbt build in DuckDB, then publish results to Postgres
 make test
 
-# 5. Explore
-make serve                      # streamlit run src/serving/app.py
+# 5. Use it
+make today                      # today's win probabilities + playoff odds
+make player-value SEASON=2025   # batter / pitcher leaders; PLAYER=660271 for a card
+make backtest                   # walk-forward backtest of the outcome models
 ```
 
 Orchestration (Prefect) runs the whole chain — ingest → dbt → publish — for you:
@@ -164,27 +175,32 @@ make dbt-duckdb                          # bronze → silver → gold
 ## Roadmap
 
 1. **Phase 0 — Foundations (done):** context files, registry, storage, skeleton.
-2. **Phase 1 — Ingestion (current):** compliant bronze pipelines (Statcast, Retrosheet,
-   Lahman, Chadwick) into MinIO/Parquet; Pandera-validated silver in Postgres.
-3. **Phase 2 — Run expectancy & WPA:** RE24/WPA tables from Retrosheet events.
-4. **Phase 3 — Prediction (in progress):** home-field, Elo, Pythagorean and log5 are
-   backtested (`make backtest`), plus Statcast team-form and **starting-pitcher**
-   models. Team form does not beat Elo; starter form (rolling xwOBA allowed, split by
-   times through the order) reaches 0.6769 vs Elo's 0.6781 and wins 6 of 7 seasons,
-   but is not yet statistically significant. Bullpen form and park/weather were also
-   tried and make it significantly **worse**. See `docs/methodology.md`.
-5. **Phase 4 — Season simulation (engine done, season sim next):** the
-   plate-appearance engine simulates complete games at ~7,100 games/sec — PA outcome
-   model (odds-ratio), base-out transition matrix, lineups, substitution policy and
-   home-field advantage. It reproduces league run scoring to within 1%, home-field
-   advantage to 0.2pp, and 1-run game frequency to 0.4pp. Park and weather are wired
-   in as per-game run multipliers, and day-to-day pitcher form as a per-outing one.
-   The engine remains ~6% under-dispersed: park/weather supply ~25% of the gap and
-   pitcher form ~5%, both measured rather than tuned (see `docs/methodology.md`).
-   Plain-language write-ups live in [`docs/explainers/`](docs/explainers/). Next:
-   Monte-Carlo the schedule → playoff & World Series odds.
-6. **Phase 5 — Counterfactuals:** perturb player rate inputs, re-simulate, surface
-   improvement levers; package as affordable analysis products.
+2. **Phase 1 — Ingestion (done):** compliant bronze pipelines (Statcast, Retrosheet,
+   Lahman, Chadwick, Stats API) into MinIO/Parquet; dbt silver/gold in DuckDB,
+   published to Postgres; Prefect daily chain.
+3. **Phase 2 — Player & team analysis (in progress):** RE24 is built per season from
+   Statcast plate appearances (no Retrosheet needed for 2015+) and credited to every
+   batter and pitcher (`gd_player_re24`); season linear weights reproduce the textbook
+   values (1B .47 … HR 1.39) without being told them; `gd_batter_season` and
+   `gd_pitcher_season` carry rates, wOBA/xwOBA, context-included and context-neutral
+   runs above average, and a PA-weighted park correction. `src/features/player_value.py`
+   joins the odds-ratio model's shrunk talent rates. **Not yet:** WPA / leverage (needs
+   a win-probability table the engine can generate), defence, baserunning, salary,
+   and any serving surface beyond the CLI.
+4. **Phase 3 — Prediction (baselines done, still trying to beat Elo):** nine model
+   families backtested walk-forward (`make backtest`). Elo (0.6781) survives all of
+   them; Elo + starter form (0.6769, 6/7 seasons) is promising but not significant.
+   Bullpen, park/weather and batter × pitch-family features were measured and rejected.
+   See `docs/methodology.md`.
+5. **Phase 4 — Season simulation (done, with caveats):** the plate-appearance engine
+   simulates complete games at ~7,100 games/sec and reproduces run scoring, home-field
+   advantage and 1-run frequency; it remains ~6% under-dispersed, and six mechanisms
+   were measured without closing the gap. `make season` Monte-Carlos the schedule to
+   playoff and World Series odds; `make season-backtest` scores them from 1 September
+   2023–25 — locks and also-rans are well calibrated, the 75–95% band is overconfident,
+   and the report says so. Plain-language write-ups in [`docs/explainers/`](docs/explainers/).
+6. **Phase 5 — Counterfactuals (next):** perturb a player's shrunk rate inputs,
+   re-simulate, surface improvement levers; package as affordable analysis products.
 
 ## Data & licensing — the short version
 
