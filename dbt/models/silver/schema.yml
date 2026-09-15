@@ -184,3 +184,43 @@ models:
       - name: is_remaining
         tests: [not_null]
 
+
+  - name: sv_players
+    description: >
+      The player dimension, one row per MLBAM player id: every id in the Chadwick
+      register plus every id observed in Statcast (the register trails debuts).
+      Chadwick supplies the ID crosswalk and names; Lahman People/Fielding enrich
+      with bio, handedness and primary position, with Statcast-derived handedness
+      as the fallback for players Lahman has not yet catalogued.
+    columns:
+      - name: player_id
+        description: "MLBAM id — the key every fact table's batter/pitcher uses."
+        tests: [unique, not_null]
+      - name: name_full
+        description: "Null only for a player Statcast has seen but the Chadwick register has not yet listed."
+        tests:
+          - not_null:
+              config: {where: "in_chadwick"}
+      - name: in_chadwick
+        tests: [not_null]
+      - name: bats
+        description: "L, R or B (switch). Lahman where present, else derived from Statcast stand."
+        tests:
+          - accepted_values:
+              arguments: {values: ["L", "R", "B"]}
+              config: {where: "bats is not null"}
+      - name: throws
+        description: "L, R or B (both). Lahman where present, else derived from Statcast p_throws."
+        tests:
+          - accepted_values:
+              arguments: {values: ["L", "R", "B"]}
+              config: {where: "throws is not null"}
+      - name: primary_position
+        description: "Position with the most career games in Lahman Fielding; null if not in Lahman."
+        tests:
+          - accepted_values:
+              arguments: {values: ["P", "C", "1B", "2B", "3B", "SS", "OF", "LF", "CF", "RF", "DH"]}
+              config: {where: "primary_position is not null"}
+      - name: statcast_pa
+        description: "Plate appearances as a batter across the whole Statcast lake; 0 if none."
+        tests: [not_null]

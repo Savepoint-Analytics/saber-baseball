@@ -13,6 +13,10 @@ sources:
         description: "Pitch-level Statcast (© MLB Advanced Media / Baseball Savant) — derived analysis only."
       - name: lahman_teams
         description: "Lahman Teams table (CC BY-SA 3.0)."
+      - name: lahman_people
+        description: "Lahman People table — player bio, bats/throws, debut (CC BY-SA 3.0)."
+      - name: lahman_fielding
+        description: "Lahman Fielding table — games by position per season (CC BY-SA 3.0)."
       - name: retrosheet_events
         description: "Retrosheet play-by-play events (free w/ required notice)."
       - name: statsapi_schedule
