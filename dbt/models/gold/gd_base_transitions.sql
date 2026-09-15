@@ -17,38 +17,15 @@
 -- truncated by rule rather than by baseball.
 {{ config(materialized='table') }}
 
-with pa as (
-    select *
+-- Only complete half-innings: see `in_complete_half_inning` in sv_plate_appearances
+-- for why a walk-off cannot be detected by counting outs, and why the game's final
+-- half-inning is the one that is dropped. It costs ~6% of half-innings and buys a
+-- matrix that cannot contain impossible transitions.
+with complete as (
+    select *, {{ era('season') }} as era
     from {{ ref('sv_plate_appearances') }}
     where season_phase = 'regular'
-),
-
--- A half-inning is only known to be complete if it is not the game's last. The
--- outs_after column coalesces a missing "next PA" to 3, so max(outs_after) is 3 for
--- every half-inning and cannot distinguish a real third out from the end of play --
--- which is why the earlier filter silently excluded nothing, and why 1.25% of
--- bases-loaded home runs appeared to end the inning. Only the final half-inning of a
--- game can be truncated (a walk-off stops play mid-inning), so dropping exactly that
--- one is unambiguous. It costs ~6% of half-innings and buys a matrix that cannot
--- contain impossible transitions.
-last_half as (
-    select
-        game_pk,
-        max(inning * 2 + case when inning_topbot = 'Bot' then 1 else 0 end) as last_half_id
-    from pa
-    group by 1
-),
-
-complete as (
-    select p.*,
-        case
-            when p.season <= 2018 then '2015-2018'
-            when p.season <= 2022 then '2019-2022'
-            else '2023-2026'
-        end as era
-    from pa p
-    join last_half l on l.game_pk = p.game_pk
-    where p.inning * 2 + case when p.inning_topbot = 'Bot' then 1 else 0 end < l.last_half_id
+      and in_complete_half_inning
 ),
 
 counted as (

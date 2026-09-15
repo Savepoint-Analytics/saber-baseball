@@ -129,6 +129,27 @@ models:
           - dbt_utils.accepted_range:
               arguments: {min_value: 0.0, max_value: 3.0, inclusive: true}
 
+  - name: gd_run_expectancy_season
+    description: >
+      RE24 matrix per season rather than per era — the baseline for player value,
+      so "above average" means above this season's average. Same population rules
+      as gd_run_expectancy.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, state]
+    columns:
+      - name: run_expectancy
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0.0, max_value: 3.0, inclusive: true}
+      - name: plate_appearances
+        description: "PAs observed in this state; the rarest (runner on third, none out) has ~400, 143 in 2020."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 100, inclusive: true}
+
   - name: gd_base_transitions
     description: >
       Empirical P(next state, runs | state, outcome). state_after = 24 is the
@@ -259,3 +280,138 @@ models:
           - dbt_utils.accepted_range:
               arguments: {min_value: 0, max_value: 1}
 
+
+  - name: gd_pa_run_value
+    description: >
+      RE24 run value of every plate appearance: RE(after) - RE(before) + runs, from
+      gd_run_expectancy_season for the PA's season. Grain is (game_pk, at_bat_number). The
+      building block for player RE24, linear weights and the season marts; not
+      published (PA-level detail stays in the lake).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [game_pk, at_bat_number]
+      # Every PA must find its season and state in the RE matrix. A silent miss
+      # would drop rows from the inner join and every downstream total would be
+      # quietly short.
+      - dbt_utils.equal_rowcount:
+          arguments:
+            compare_model: ref('sv_plate_appearances')
+    columns:
+      - name: re24
+        description: "Batting-team run value of the PA. A bases-empty HR is exactly 1 + RE(0 out, empty) - RE(0 out, empty) = 1."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -3.0, max_value: 6.0, inclusive: true}
+      - name: re_before
+        tests: [not_null]
+      - name: re_after
+        tests: [not_null]
+
+  - name: gd_player_re24
+    description: >
+      RE24 per player-season, one row per role (batter / pitcher). Positive is
+      good in both roles: a pitcher's re24 is the negative of what the batters he
+      faced accrued. League totals of the two roles cancel by construction.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, season_phase, role, player_id]
+    columns:
+      - name: role
+        tests:
+          - accepted_values:
+              arguments: {values: ["batter", "pitcher"]}
+      - name: pa
+        description: "PAs as a batter, or batters faced as a pitcher (a 200-inning starter faces ~850)."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 1, max_value: 1100, inclusive: true}
+      - name: re24
+        tests: [not_null]
+
+  - name: gd_linear_weights
+    description: >
+      Average run value of each PA outcome per season, measured from
+      gd_pa_run_value over complete half-innings. Already centred: the PA-weighted
+      mean across outcomes is zero.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, outcome]
+    columns:
+      - name: run_value
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -0.5, max_value: 2.0, inclusive: true}
+      - name: plate_appearances
+        description: "Triples are the rarest outcome: ~900 a full season, 226 in 2020."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 100, inclusive: true}
+
+  - name: gd_batter_season
+    description: >
+      One row per batter-season: counting stats, K/BB/on-base rates, wOBA/xwOBA,
+      RE24 (context-included), linear-weights RAA (context-neutral), PA-weighted
+      park factor and the park-adjusted run values. Raw rates, not shrunk.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, season_phase, player_id]
+    columns:
+      - name: pa
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "= k + bb + hbp + singles + doubles + triples + hr + roe + outs"
+      - name: woba
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 2.5, inclusive: true}
+      - name: on_base_rate
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 1, inclusive: true}
+      - name: park_factor
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0.6, max_value: 1.6, inclusive: true}
+      - name: lw_raa_park_adj
+        tests: [not_null]
+
+  - name: gd_pitcher_season
+    description: >
+      One row per pitcher-season: batters faced, outcomes allowed, rates, wOBA/xwOBA
+      allowed, RE24 saved and linear-weights RAA saved (positive = runs prevented),
+      PA-weighted park factor and the park-adjusted values. Starts per
+      sv_statcast_pitcher_game.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, season_phase, player_id]
+    columns:
+      - name: bf
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "= k + bb + hbp + singles + doubles + triples + hr + roe + outs"
+      - name: starts
+        tests:
+          - dbt_utils.expression_is_true:
+              arguments:
+                expression: "<= games"
+      - name: on_base_allowed
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 1, inclusive: true}
+      - name: park_factor
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0.6, max_value: 1.6, inclusive: true}
+      - name: lw_raa_saved_park_adj
+        tests: [not_null]

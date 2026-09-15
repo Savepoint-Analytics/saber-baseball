@@ -30,7 +30,7 @@
 {{ config(materialized='table') }}
 
 with spine as (
-    select game_pk, game_date, season, season_phase, home_team_id, away_team_id
+    select game_pk, game_date, season, season_phase, home_team_id, away_team_id, venue_id
     from {{ ref('sv_games') }}
 ),
 
@@ -51,6 +51,7 @@ pa as (
         s.game_date,
         s.season,
         s.season_phase,
+        s.venue_id,
         p.inning,
         p.inning_topbot,
         p.at_bat_number,
@@ -65,6 +66,12 @@ pa as (
         p.on_2b is not null                        as b2_before,
         p.on_3b is not null                        as b3_before,
         coalesce(r.runs_in_pa, 0)                  as runs_on_play,
+        -- Savant's wOBA / xwOBA on the PA-ending pitch. woba_denom is 0 for
+        -- sacrifices and catcher's interference, so rate marts divide by its sum
+        -- rather than by PA count; see sv_statcast_pitcher_game for the xwOBA note.
+        p.woba_value,
+        p.woba_denom,
+        p.xwoba,
         p.events,
         -- Pitch family of the pitch that ENDED the plate appearance. Grouped into
         -- three families rather than kept as 18 raw types: 4,181 batter x pitch-type
@@ -100,7 +107,17 @@ sequenced as (
         lead(outs_before) over w  as next_outs,
         lead(b1_before)   over w  as next_b1,
         lead(b2_before)   over w  as next_b2,
-        lead(b3_before)   over w  as next_b3
+        lead(b3_before)   over w  as next_b3,
+        -- Runs from this PA to the end of its half-inning: the quantity a
+        -- run-expectancy matrix averages.
+        sum(runs_on_play) over (
+            partition by game_pk, inning, inning_topbot
+            order by at_bat_number
+            rows between current row and unbounded following
+        )                         as runs_to_end_of_inning,
+        inning * 2 + case when inning_topbot = 'Bot' then 1 else 0 end as half_id,
+        max(inning * 2 + case when inning_topbot = 'Bot' then 1 else 0 end)
+            over (partition by game_pk) as last_half_id
     from pa
     window w as (partition by game_pk, inning, inning_topbot order by at_bat_number)
 )
@@ -110,6 +127,7 @@ select
     game_date,
     season,
     season_phase,
+    venue_id,
     inning,
     inning_topbot,
     at_bat_number,
@@ -127,7 +145,18 @@ select
     events,
     pitch_family,
     runs_on_play,
+    woba_value,
+    woba_denom,
+    xwoba,
     next_outs is null                              as ends_half_inning,
+    -- A half-inning is only known to be complete if it is not the game's last.
+    -- outs_after coalesces a missing next PA to 3, so it cannot tell a real third
+    -- out from a walk-off that stopped play mid-inning; only the final half-inning
+    -- of a game can be truncated, so excluding exactly that one is unambiguous.
+    -- Every run-expectancy-style mart (RE24, transitions, linear weights) filters
+    -- on this flag so they agree on the population they were fitted to.
+    half_id < last_half_id                         as in_complete_half_inning,
+    runs_to_end_of_inning,
     coalesce(next_outs, 3)                         as outs_after,
     coalesce(next_b1, false)                       as b1_after,
     coalesce(next_b2, false)                       as b2_after,
