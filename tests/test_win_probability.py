@@ -12,7 +12,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from src.config import settings
 from src.features.win_probability import (
     EXTRA_INNING,
     MAX_DIFF,
@@ -24,9 +23,15 @@ from src.features.win_probability import (
 )
 from src.simulation.game_engine import AWAY, GHOST_RUNNER_STATE, HOME
 from src.simulation.transitions import N_STATES, TERMINAL_STATE
+from tests.conftest import LAKE, requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake(
+    "main_gold.gd_win_probability",
+    "main_gold.gd_pa_run_value.home_wp_before",
+    "main_gold.gd_batter_season.wpa",
+    "main_gold.gd_pitcher_season.mean_leverage",
+    "main_silver.sv_plate_appearances.regulation_innings",
+)
 
 
 def test_diff_index_clamps_symmetrically():

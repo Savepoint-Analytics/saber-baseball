@@ -12,7 +12,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.config import settings
 from src.simulation.pa_model import OUTCOMES, PAOutcomeModel, _regression_constant
 from src.simulation.transitions import (
     MAX_RUNS,
@@ -20,9 +19,9 @@ from src.simulation.transitions import (
     TERMINAL_STATE,
     TransitionMatrix,
 )
+from tests.conftest import requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake()
 
 
 def _pa_frame(n=4000, seed=0) -> pd.DataFrame:

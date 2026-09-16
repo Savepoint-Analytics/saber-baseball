@@ -13,7 +13,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.config import settings
 from src.features.run_expectancy import (
     N_STATES,
     build_re24,
@@ -22,9 +21,17 @@ from src.features.run_expectancy import (
     re24_credit,
     wpa_credit,
 )
+from tests.conftest import LAKE, requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake(
+    "main_silver.sv_players",
+    "main_gold.gd_batter_season",
+    "main_gold.gd_pitcher_season",
+    "main_gold.gd_linear_weights",
+    "main_gold.gd_run_expectancy_season",
+    "main_gold.gd_pa_run_value.wpa",
+    "main_silver.sv_plate_appearances.runs_to_end_of_inning",
+)
 
 
 def _state(outs: int, b1: bool = False, b2: bool = False, b3: bool = False) -> int:

@@ -12,15 +12,14 @@ import datetime as dt
 import numpy as np
 import pytest
 
-from src.config import settings
 from src.simulation.season import (
     PLAYOFF_TEAMS_PER_LEAGUE,
     load_season_state,
     project_season,
 )
+from tests.conftest import requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake()
 
 
 @pytest.fixture(scope="module")

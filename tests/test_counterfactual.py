@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.config import settings
 from src.simulation.counterfactual import (
     PROPORTIONAL,
     Perturbation,
@@ -20,9 +19,12 @@ from src.simulation.counterfactual import (
     perturbed_model,
 )
 from src.simulation.pa_model import OUTCOMES, PAOutcomeModel
+from tests.conftest import requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake(
+    "main_gold.gd_linear_weights",
+    "main_silver.sv_players",
+)
 
 # A realistic nine-outcome vector that sums to exactly 1: `apply` renormalises,
 # so a fixture that does not sum to 1 quietly shifts every assertion below.

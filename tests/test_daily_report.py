@@ -15,12 +15,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.config import settings
 from src.models.backtest import STARTER_COLUMNS
 from src.serving.daily_report import ATTRIBUTION_SOURCES, _shown, build_features, load_slate
+from tests.conftest import requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake()
 
 
 def test_report_attributes_its_sources():

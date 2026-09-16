@@ -17,7 +17,29 @@ connection rather than opening the lake itself.
 
 from __future__ import annotations
 
+import os
+import sys
+
 import pandas as pd
+
+
+def _ensure_src_importable() -> None:
+    """Put the project root on ``sys.path`` if ``src`` is not already importable.
+
+    dbt runs as its own process with ``cwd`` set to the dbt project directory, and
+    a console script does not put the cwd (or its parent) on ``sys.path``. On a
+    developer machine ``src`` resolves anyway because the project is an editable
+    install in ``.venv``; in a container that only pip-installed the dependencies
+    it does not, and this model would be the one thing in the DAG that fails.
+    Rather than depend on how the environment was provisioned, add the directory
+    above the dbt project -- the repository root -- when the import would fail.
+    """
+    try:
+        import src  # noqa: F401
+    except ModuleNotFoundError:
+        root = os.path.dirname(os.path.abspath(os.getcwd()))
+        if root not in sys.path:
+            sys.path.insert(0, root)
 
 
 def model(dbt, session):
@@ -26,6 +48,7 @@ def model(dbt, session):
     dbt.ref("sv_plate_appearances")
     dbt.ref("gd_base_transitions")
 
+    _ensure_src_importable()
     from src.features.win_probability import build_for_season
 
     seasons = [

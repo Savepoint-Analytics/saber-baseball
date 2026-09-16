@@ -11,7 +11,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from src.config import settings
 from src.simulation.lineup import (
     BF_BUCKETS,
     LINEUP_SIZE,
@@ -20,9 +19,9 @@ from src.simulation.lineup import (
     SubstitutionPolicy,
     bf_bucket,
 )
+from tests.conftest import requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake()
 
 
 def _lineup() -> Lineup:
