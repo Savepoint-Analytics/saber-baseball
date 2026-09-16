@@ -99,8 +99,15 @@ the plate-appearance layer they produced.
   gap against real games) and credited as WPA / WPA-per-LI / mean leverage. Not
   yet built: defence, baserunning, salary, any serving surface beyond the CLI.
 
-**Next:** Phase 5 counterfactuals on the shrunk player rates the value card already
-exposes.
+- **Phase 5 — Counterfactuals: first cut, 2026-09-15.** `src/simulation/counterfactual.py`
+  perturbs one player's rate vector and re-runs his real games paired on common
+  random numbers (arms correlate +0.95; standard error ~5x smaller than independent
+  runs). Reports an analytic linear-weights delta and a simulated one in runs and
+  wins. Ohtani, three points of K → 1B: +0.081 runs/game, +1.18 ± 0.50 wins over
+  his 158 games.
+
+**Next:** package the counterfactual and value-card outputs as products (a serving
+surface beyond the CLI); then defence, baserunning and salary.
 
 ## 7. Modeling approach (intended)
 

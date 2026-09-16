@@ -43,7 +43,7 @@ def main() -> None:
         "- **Phase 2 (in progress):** RE24 and WPA per player, linear weights, season value marts\n"
         "- **Phase 3 (done, Elo still the bar):** nine outcome-model families backtested\n"
         "- **Phase 4 (done, calibration caveat):** PA engine, Monte-Carlo season → playoff/WS odds\n"
-        "- **Phase 5 (next):** counterfactual player simulation"
+        "- **Phase 5 (first cut):** counterfactual player simulation (`make counterfactual`)"
     )
 
     st.divider()

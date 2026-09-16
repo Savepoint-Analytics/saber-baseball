@@ -980,6 +980,68 @@ Muñoz, Chapman at mean LI 2.0–2.7) rise into the top ten by WPA on 200–250
 batters faced, and WPA/LI puts the starters back ahead. Judge 2025: +5.59 WPA,
 +7.66 WPA/LI — the difference is timing, and timing does not persist.
 
+## Phase 5: counterfactual player simulation (2026-09-15)
+
+"If this hitter turned strikeouts into singles, what is it worth to his team?"
+`src/simulation/counterfactual.py` perturbs one player's row in the odds-ratio
+model and re-runs the games he actually played, in his own lineup, his own parks,
+against the starters he actually faced. `make counterfactual` is the entry point.
+
+**The destination is the whole question, so it is explicit.** A `Perturbation`
+names where the moved probability goes — a named outcome, or spread proportionally
+— because the same "cut strikeouts by a point" is worth almost nothing or a great
+deal depending on it. Ohtani's 2025 levers, at that season's linear weights per
+600 PA:
+
+| lever | runs/600 |
+|---|---|
+| power: OUT → HR | +9.92 |
+| contact: K → 1B | +4.47 |
+| hard contact: OUT → 1B | +4.43 |
+| discipline: OUT → BB | +3.59 |
+| contact: K → balls in play (proportional) | +2.80 |
+| **contact: K → OUT** | **+0.04** |
+
+The last row is the point. A strikeout and a batted-ball out are worth the same
+(−.27 vs −.27), so "make more contact" is worth nothing unless the contact is
+good contact — a result the analytic layer gives instantly and for free.
+
+For a **pitcher** each lever is reversed rather than negated (he gives up one
+fewer home run instead of hitting one more), which is worth exactly what the
+batter's version is worth and keeps every row of his table something he would
+want to do. Skubal's 2025 table is headed by HR → OUT at +9.92 and 1B → K at
++4.47.
+
+**Two layers, both reported.** The analytic delta is context-neutral and exact.
+The simulated one runs the engine over the player's real games and answers in
+wins. For Ohtani, three points of strikeouts becoming singles (+13.4 runs/600
+analytically) over his 158 games:
+
+| | baseline | counterfactual | delta |
+|---|---|---|---|
+| runs scored/game | 5.025 | 5.106 | **+0.081 ± 0.020** |
+| runs allowed/game | 4.270 | 4.286 | +0.016 ± 0.016 |
+| win probability | 0.573 | 0.581 | **+0.0074 ± 0.0032** |
+| wins over those games | | | **+1.18 ± 0.50** |
+
+The simulated +12.8 runs over 158 games sits right on the analytic +13.4 per 600
+PA, which is the check that the engine and the weights agree. What simulation adds
+is the conversion to *wins in this context* — diminishing returns in a good lineup,
+the run environment of his parks, and the shape of the score distribution.
+
+**Common random numbers, and they were verified rather than assumed.** Both arms
+run from the same per-game seed. They diverge — one different outcome draw and the
+streams separate — so the pairing is imperfect, but measured on 2025 the arms
+correlate **+0.95** and the standard error of the difference is **4.7× smaller**
+than two independent runs. That is what makes a 20-game test meaningful and a
+158-game answer precise to ±0.5 wins. A test asserts the correlation rather than
+trusting the technique.
+
+**What it is not.** The perturbed rate is treated as new true talent, not a hot
+streak; no other player changes; the manager's policies are the measured ones,
+unchanged. The answer is "what this would have been worth, in this team, this
+season" — not a claim that the improvement is achievable.
+
 ### Not yet built
 
 Defence and baserunning attributed to players (team defence is measured, r = +0.52

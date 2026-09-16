@@ -13,7 +13,7 @@ BACKFILL_END ?= $(shell date +%Y)
 .PHONY: help setup sync infra-up infra-down ingest ingest-lahman ingest-chadwick \
         ingest-statcast ingest-retrosheet ingest-statsapi ingest-teams backfill dbt dbt-duckdb \
         publish sync-minio warehouse flows pipeline backtest sim-eval season season-backtest today \
-        player-value test lint fmt typecheck serve clean
+        player-value counterfactual test lint fmt typecheck serve clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -91,6 +91,10 @@ today: ## Publishable predictions for today's slate + playoff odds
 
 player-value: ## Player value leaders for $(SEASON) (PLAYER=<mlbam id> for one card)
 	uv run python -m src.features.player_value --season $(SEASON) $(if $(PLAYER),--player $(PLAYER),)
+
+counterfactual: ## Improvement levers for PLAYER in $(SEASON); add CHANGE=K=-0.03 ABSORB=1B to simulate
+	uv run python -m src.simulation.counterfactual --season $(SEASON) --player $(PLAYER) \
+		$(if $(ROLE),--role $(ROLE),) $(if $(CHANGE),--change $(CHANGE),) $(if $(ABSORB),--absorb $(ABSORB),)
 
 season: ## Project the season to playoff & World Series odds
 	uv run python -m src.simulation.season --season $(SEASON)

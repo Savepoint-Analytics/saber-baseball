@@ -108,7 +108,7 @@ saber-baseball/
 │   ├── schemas/                  # Pandera schemas gating ingested tables
 │   ├── features/                 # RE24 + WPA mirrors, win-probability solver, value cards
 │   ├── models/                   # baselines, outcome models, backtests, playoff calibration
-│   ├── simulation/               # PA-level engine, season projection
+│   ├── simulation/               # PA-level engine, season projection, counterfactuals
 │   └── serving/                  # daily prediction report; Streamlit shell
 │
 ├── dbt/                          # dbt project (bronze → silver → gold)
@@ -140,6 +140,7 @@ make test
 # 5. Use it
 make today                      # today's win probabilities + playoff odds
 make player-value SEASON=2025   # batter / pitcher leaders; PLAYER=660271 for a card
+make counterfactual SEASON=2025 PLAYER=660271   # improvement levers, then simulate one
 make backtest                   # walk-forward backtest of the outcome models
 ```
 
@@ -202,8 +203,13 @@ make dbt-duckdb                          # bronze → silver → gold
    playoff and World Series odds; `make season-backtest` scores them from 1 September
    2023–25 — locks and also-rans are well calibrated, the 75–95% band is overconfident,
    and the report says so. Plain-language write-ups in [`docs/explainers/`](docs/explainers/).
-6. **Phase 5 — Counterfactuals (next):** perturb a player's shrunk rate inputs,
-   re-simulate, surface improvement levers; package as affordable analysis products.
+6. **Phase 5 — Counterfactuals (first cut done):** `make counterfactual` perturbs a
+   player's shrunk rate inputs and re-runs his real games, paired on common random
+   numbers (arms correlate +0.95, so the standard error is ~5x smaller than
+   independent runs). Reports an instant linear-weights answer and a simulated one
+   in runs and wins. The lever table makes the key point plain: a point of
+   strikeouts converted to *outs* is worth +0.04 runs/600, converted to *singles*
+   +4.5. **Next:** package as affordable analysis products.
 
 ## Data & licensing — the short version
 
