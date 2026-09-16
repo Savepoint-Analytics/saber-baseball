@@ -12,17 +12,23 @@ of plate appearances without a dbt run.
 
 with RE(after) = 0 once the third out is recorded.
 
-WPA is not built yet. It needs a win-probability table keyed on inning, score
-differential, base-out state and half, which the simulation engine can generate
-(it simulates from any state) but nobody has yet. ``build_wpa_table`` says so
-rather than pretending.
+WPA is the same construction on win probability. The table is solved in
+``src.features.win_probability`` (a dbt Python model materialises it as
+``gd_win_probability``) and ``wpa_credit`` below is the pandas mirror of the join
+in ``gd_pa_run_value``.
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+import numpy as np
 import pandas as pd
 
 from src.simulation.transitions import _lake
+
+if TYPE_CHECKING:
+    from src.features.win_probability import WinProbabilityTable
 
 N_STATES = 24
 
@@ -81,9 +87,49 @@ def load_run_expectancy(season: int) -> pd.Series:
     return frame.set_index("state")["run_expectancy"].reindex(range(N_STATES))
 
 
-def build_wpa_table(events: pd.DataFrame) -> pd.DataFrame:
-    """Win-probability lookup for WPA. Not built: see the module docstring."""
-    raise NotImplementedError(
-        "WPA needs a win-probability table (inning x score x base-out x half). "
-        "The simulation engine can generate one; it has not been wired up yet."
+def build_wpa_table(season: int) -> pd.DataFrame:
+    """The solved win-probability table for a season, long form (see ``gd_win_probability``)."""
+    from src.features.win_probability import build_for_season
+
+    return build_for_season(season).to_frame()
+
+
+def wpa_credit(pa: pd.DataFrame, table: WinProbabilityTable) -> pd.Series:
+    """Per-PA WPA for the batting team from a ``WinProbabilityTable``.
+
+    ``pa`` needs ``inning``, ``regulation_innings``, ``inning_topbot``,
+    ``home_score_before``, ``away_score_before``, ``state_before`` and, for the
+    situation after, ``next_inning``, ``next_half``, ``next_home_score``,
+    ``next_away_score``, ``next_state`` (null for a game's final PA) plus
+    ``runs_on_play``. Mirrors ``gd_pa_run_value``: the after-situation is the next
+    PA as observed, and only the game's last PA is scored against "half over".
+    """
+    from src.features.win_probability import TERMINAL_STATE as HALF_OVER
+    from src.features.win_probability import effective_inning
+
+    home = (pa["inning_topbot"] == "Bot").to_numpy()
+    half = home.astype(int)
+    diff_before = (pa["home_score_before"] - pa["away_score_before"]).to_numpy()
+    before = table.lookup(
+        effective_inning(pa["inning"].to_numpy(), pa["regulation_innings"].to_numpy()),
+        half,
+        diff_before,
+        pa["state_before"].to_numpy(),
     )
+    ended = pa["next_inning"].isna().to_numpy()
+    inning_after = np.where(ended, pa["inning"], pa["next_inning"].fillna(0)).astype(int)
+    half_after = np.where(ended, half, (pa["next_half"] == "Bot").astype(int))
+    signed_runs = np.where(home, 1, -1) * pa["runs_on_play"].to_numpy()
+    diff_after = np.where(
+        ended,
+        diff_before + signed_runs,
+        (pa["next_home_score"].fillna(0) - pa["next_away_score"].fillna(0)).to_numpy(),
+    ).astype(int)
+    state_after = np.where(ended, HALF_OVER, pa["next_state"].fillna(0)).astype(int)
+    after = table.lookup(
+        effective_inning(inning_after, pa["regulation_innings"].to_numpy()),
+        half_after,
+        diff_after,
+        state_after,
+    )
+    return pd.Series((after - before) * np.where(home, 1.0, -1.0), index=pa.index, name="wpa")

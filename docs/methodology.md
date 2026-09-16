@@ -69,9 +69,9 @@ Coverage as of 2026-08-31: 8,184,213 pitches over 27,752 games, 2015-2026, and
    Pythagorean, log5 (`src/models/baselines.py`) — then logistic → gradient boosting
    (XGBoost/LightGBM) on team-strength + pitching matchup + park + rest features.
    Judged on **log-loss** and **calibration** (reliability curve) on held-out seasons.
-2. **Player & team analysis.** Context-adjusted value via RE24 (built per season from
-   Statcast PAs, `gd_pa_run_value` → `gd_player_re24`) and, still to come, WPA — both
-   features and "how games are won" explanation. See "Phase 2: player evaluation".
+2. **Player & team analysis.** Context-adjusted value via RE24 and WPA (built per
+   season from Statcast PAs, `gd_pa_run_value` → `gd_player_re24`) — both features
+   and "how games are won" explanation. See "Phase 2: player evaluation".
 3. **Season/playoff projection.** Monte-Carlo the remaining schedule → playoff → World
    Series odds (`src/simulation/game_engine.py`), calibrated vs. history.
 4. **Counterfactual simulation.** Bayesian partial-pooled player rates (PyMC/bambi);
@@ -826,6 +826,8 @@ joined to a player dimension and to the odds-ratio model's shrunk rates.
 `make player-value` prints leaders or a card; `dbt/models/gold/gd_*_season.sql`
 and `src/features/player_value.py` are the code paths.
 
+Companion: "Win probability and leverage" below adds WPA to the same marts.
+
 ### The player dimension
 
 `sv_players` keys on the MLBAM id every fact table already uses. The Chadwick
@@ -920,13 +922,70 @@ The 2024 and 2025 leaderboards (Judge, Ohtani, Soto, Witt; Skubal, Yamamoto,
 Skenes) are what a reader would expect, which is the cheapest validation there is
 and a test pins the top of it.
 
+### Win probability and leverage: solved, not simulated (2026-09-15)
+
+WPA needs `P(home wins | inning, half, score difference, base-out state)` for every
+situation. `src/features/win_probability.py` **solves** it rather than sampling it:
+the transition matrix gives the exact distribution of runs over the rest of any
+half-inning (a 24×24 linear system per run count), and backward induction over
+half-innings gives win probability with the rules applied explicitly — no bottom
+half when the home side leads after the top of the ninth, a walk-off the instant
+the home side leads, and tied extra innings as a fixed point since every extra
+inning looks the same. It uses the same components as RE24 — the odds-ratio
+model's league, state and home/away terms, and `gd_base_transitions` — so the
+two disagree only where context matters. One table per season, 20,500 rows,
+0.2 seconds; a dbt Python model (`gd_win_probability`) keeps it inside the DAG.
+
+**Exactness is tested, and so is truth.** The martingale property — averaged over
+what the next PA can do, WP must not move — holds to 3 × 10⁻¹⁵. And the numbers
+land on the literature without being told it:
+
+| Situation | Ours (2025) | Published |
+|---|---|---|
+| Mean E\|ΔWP\| per PA (leverage scale) | **0.0343** | ~0.0346 (Tango) |
+| Bottom 9th, tied, bases empty, none out | 0.643 | ~0.63–0.65 |
+| Bottom 9th, down 1, bases loaded, none out | 0.732 | ~0.72 |
+| Leverage: leadoff PA of the game | 0.86 | 0.87 |
+| Leverage: bottom 9th, tied, loaded, none out | 2.45 | ~2.4–2.6 |
+| Highest single-PA leverage in the data | 11.2 | ~10–11 |
+
+**Calibration against real games.** Binning every regular-season PA by stated home
+WP, the observed home win rate tracks it with a PA-weighted mean gap of **0.011**.
+The residual is systematic and expected: the 0.1–0.3 bins run about 2 points
+*more* extreme than stated, as do 0.7–0.8. The table is team-agnostic, and a side
+that is leading is on average the better side, so leads hold slightly more often
+than league-average arithmetic says. That is the standard WPA convention (a
+team-adjusted WPA would credit a Dodgers rally less than a Rockies one) and is
+left as measured.
+
+**Two things the data forced.** First, "after" is the next plate appearance as
+*observed* — its inning, half, score and base-out state — not the situation the
+rules say should follow. Postseason extra innings start with the bases empty
+while the season's table assumes a ghost runner; a handful of half-innings open
+with a runner on third; 2020–21 doubleheaders were seven innings (detected from
+play, and looked up two innings later than they read). Reading the real next PA
+makes WPA telescope exactly across every game — `assert_wpa_telescopes_to_the_result`
+holds Σ WPA = final − opening WP to 10⁻⁹ for all 27,000 games. Second, ~10 runs
+a season score *between* plate appearances (a balk, a pickoff throw into the
+stands) and Statcast only shows them on the next pitch. `runs_on_play` now reads
+to the next PA's first pitch, which took the 2025 game reconciliation from
+2,420/2,430 to **2,429/2,430** and closed the score discontinuity that would
+otherwise break WPA.
+
+**What it says about players.** `gd_player_re24`, `gd_batter_season` and
+`gd_pitcher_season` now carry `wpa`, `wpa_per_li` (each PA's WPA divided by its
+leverage before summing — Tango's context-neutral wins) and `mean_leverage`. The
+leaderboards show the classic pattern the literature predicts: closers (Hader,
+Muñoz, Chapman at mean LI 2.0–2.7) rise into the top ten by WPA on 200–250
+batters faced, and WPA/LI puts the starters back ahead. Judge 2025: +5.59 WPA,
++7.66 WPA/LI — the difference is timing, and timing does not persist.
+
 ### Not yet built
 
-WPA and leverage (a win-probability table keyed on inning × score × base-out × half,
-which the engine can generate from any state); defence and baserunning attributed
-to players (team defence is measured, r = +0.52 to +0.64 year over year, and
-unattributed); salary (Lahman's Salaries table ends in 2016 — a new source and a
-`public-data-sources.md` entry first); any serving surface beyond the CLI.
+Defence and baserunning attributed to players (team defence is measured, r = +0.52
+to +0.64 year over year, and unattributed); salary (Lahman's Salaries table ends
+in 2016 — a new source and a `public-data-sources.md` entry first); any serving
+surface beyond the CLI.
 
 ## Evaluation
 

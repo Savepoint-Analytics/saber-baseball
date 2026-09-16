@@ -20,6 +20,7 @@ from src.features.run_expectancy import (
     build_wpa_table,
     load_run_expectancy,
     re24_credit,
+    wpa_credit,
 )
 
 LAKE = (settings.data_dir / "saber.duckdb").resolve()
@@ -110,9 +111,29 @@ def test_build_re24_rejects_a_frame_without_the_needed_columns():
         build_re24(pd.DataFrame({"state_before": [0]}))
 
 
-def test_wpa_is_honestly_unbuilt():
-    with pytest.raises(NotImplementedError):
-        build_wpa_table(pd.DataFrame())
+@needs_lake
+def test_pandas_wpa_matches_the_dbt_wpa_on_a_game():
+    from src.features.win_probability import build_for_season
+
+    game = _lake_sql(
+        """
+        select p.inning, p.regulation_innings, p.inning_topbot, p.home_score_before,
+               p.away_score_before, p.state_before, p.runs_on_play,
+               lead(p.inning) over g as next_inning, lead(p.inning_topbot) over g as next_half,
+               lead(p.home_score_before) over g as next_home_score,
+               lead(p.away_score_before) over g as next_away_score,
+               lead(p.state_before) over g as next_state,
+               v.wpa
+        from main_silver.sv_plate_appearances p
+        join main_gold.gd_pa_run_value v using (game_pk, at_bat_number)
+        where p.game_pk = (select min(game_pk) from main_silver.sv_games where season = 2025)
+        window g as (order by p.at_bat_number)
+        order by p.at_bat_number
+        """
+    )
+    credit = wpa_credit(game, build_for_season(2025))
+    np.testing.assert_allclose(credit.to_numpy(), game.wpa.to_numpy(), atol=1e-9)
+    assert len(build_wpa_table(2025)) == 20500
 
 
 # --- lake-backed -------------------------------------------------------------

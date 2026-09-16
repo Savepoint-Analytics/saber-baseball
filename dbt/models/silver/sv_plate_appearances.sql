@@ -40,7 +40,11 @@ pa_runs as (
     select
         game_pk,
         at_bat_number,
-        max(post_bat_score) - min(bat_score) as runs_in_pa
+        max(post_bat_score) - min(bat_score) as runs_in_pa,
+        -- The score as the PA began, for win probability. Scores only rise, so the
+        -- minimum over the PA's pitches is the first-pitch value.
+        min(home_score)                      as home_score_before,
+        min(away_score)                      as away_score_before
     from {{ ref('br_statcast') }}
     group by 1, 2
 ),
@@ -65,7 +69,9 @@ pa as (
         p.on_1b is not null                        as b1_before,
         p.on_2b is not null                        as b2_before,
         p.on_3b is not null                        as b3_before,
-        coalesce(r.runs_in_pa, 0)                  as runs_on_play,
+        coalesce(r.runs_in_pa, 0)                  as runs_in_pa,
+        r.home_score_before,
+        r.away_score_before,
         -- Savant's wOBA / xwOBA on the PA-ending pitch. woba_denom is 0 for
         -- sacrifices and catcher's interference, so rate marts divide by its sum
         -- rather than by PA count; see sv_statcast_pitcher_game for the xwOBA note.
@@ -101,6 +107,33 @@ pa as (
     where p.events is not null
 ),
 
+-- **Runs on the play reach to the next PA's first pitch**, not just to this PA's
+-- last. A run can score between plate appearances -- a balk or a pickoff throw
+-- into the stands with a runner on third -- and Statcast only shows it on the
+-- next pitch row. Measuring pitch-to-pitch left ~10 runs a season unattributed
+-- and, worse, left the score *before* the next PA disagreeing with the score
+-- *after* this one, so win probability did not telescope. The last PA of a
+-- half-inning keeps the within-PA measure, there being no next pitch to read.
+with_next as (
+    select
+        *,
+        lead(home_score_before) over w as next_home_score_before,
+        lead(away_score_before) over w as next_away_score_before
+    from pa
+    window w as (partition by game_pk, inning, inning_topbot order by at_bat_number)
+),
+
+scored as (
+    select
+        *,
+        case
+            when next_home_score_before is null then runs_in_pa
+            when inning_topbot = 'Bot' then next_home_score_before - home_score_before
+            else next_away_score_before - away_score_before
+        end as runs_on_play
+    from with_next
+),
+
 sequenced as (
     select
         *,
@@ -117,8 +150,18 @@ sequenced as (
         )                         as runs_to_end_of_inning,
         inning * 2 + case when inning_topbot = 'Bot' then 1 else 0 end as half_id,
         max(inning * 2 + case when inning_topbot = 'Bot' then 1 else 0 end)
-            over (partition by game_pk) as last_half_id
-    from pa
+            over (partition by game_pk) as last_half_id,
+        max(inning) over (partition by game_pk) as game_last_inning,
+        -- Base-out state at the first PA of the 8th, if there was one. A ghost
+        -- runner there (state 2) means the 8th was an extra inning.
+        min_by(
+            outs_before * 8
+                + (case when b1_before then 1 else 0 end)
+                + (case when b2_before then 2 else 0 end)
+                + (case when b3_before then 4 else 0 end),
+            at_bat_number
+        ) filter (where inning = 8) over (partition by game_pk) as first_state_inning_8
+    from scored
     window w as (partition by game_pk, inning, inning_topbot order by at_bat_number)
 )
 
@@ -145,6 +188,19 @@ select
     events,
     pitch_family,
     runs_on_play,
+    home_score_before,
+    away_score_before,
+    -- 2020-21 doubleheaders were seven innings, and the schedule feed does not say
+    -- which games. Detected from play: the game ended by the seventh, or its eighth
+    -- opened with the extra-innings ghost runner. Win probability keys on innings
+    -- remaining, so these games are looked up two innings later than they read.
+    -- (A rain-shortened nine-inning game, ~5 a season, is mislabelled by this and
+    -- gets a slightly wrong final-inning WPA; accepted.)
+    case
+        when season in (2020, 2021)
+             and (game_last_inning <= 7 or first_state_inning_8 = 2) then 7
+        else 9
+    end                                            as regulation_innings,
     woba_value,
     woba_denom,
     xwoba,

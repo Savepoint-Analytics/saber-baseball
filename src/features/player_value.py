@@ -189,6 +189,10 @@ def _runs(x: float) -> str:
     return "?" if pd.isna(x) else f"{x:+.1f}"
 
 
+def _wins(x: float) -> str:
+    return "?" if pd.isna(x) else f"{x:+.2f}"
+
+
 def _card_header(row: pd.Series, season: int) -> list[str]:
     bio = " · ".join(
         s
@@ -227,6 +231,9 @@ def format_batter_card(row: pd.Series, talent: TalentRates) -> str:
         f"{_runs(row.talent_raa_600_park_adj):>10}",
         f"  park factor {row.park_factor:.3f} (PA-weighted)",
         "",
+        f"  {'wins above average':<28}{'WPA':>9}{'WPA/LI':>10}{'mean LI':>10}",
+        f"  {'':<28}{_wins(row.wpa):>9}{_wins(row.wpa_per_li):>10}{row.mean_leverage:>10.2f}",
+        "",
         "  talent = odds-ratio rates shrunk to league; regression constants this season: "
         + ", ".join(f"{o} {talent.batter_k[o]:.0f} PA" for o in CARD_OUTCOMES),
     ]
@@ -255,6 +262,9 @@ def format_pitcher_card(row: pd.Series, talent: TalentRates) -> str:
         f"{_runs(row.talent_raa_600_park_adj):>10}",
         f"  park factor {row.park_factor:.3f} (BF-weighted)",
         "",
+        f"  {'wins above average':<28}{'WPA':>9}{'WPA/LI':>10}{'mean LI':>10}",
+        f"  {'':<28}{_wins(row.wpa):>9}{_wins(row.wpa_per_li):>10}{row.mean_leverage:>10.2f}",
+        "",
         "  talent = odds-ratio rates shrunk to league; regression constants this season: "
         + ", ".join(f"{o} {talent.pitcher_k[o]:.0f} BF" for o in CARD_OUTCOMES),
     ]
@@ -262,13 +272,33 @@ def format_pitcher_card(row: pd.Series, talent: TalentRates) -> str:
 
 
 def _leaders(frame: pd.DataFrame, value_col: str, n: int, size_col: str) -> str:
-    cols = ["name_full", size_col, "k_pct", "bb_pct", value_col, "talent_raa_600_park_adj"]
+    cols = [
+        "name_full",
+        size_col,
+        "k_pct",
+        "bb_pct",
+        value_col,
+        "talent_raa_600_park_adj",
+        "wpa",
+        "wpa_per_li",
+    ]
     shown = frame.head(n)[cols].copy()
     shown["k_pct"] = (100 * shown["k_pct"]).round(1)
     shown["bb_pct"] = (100 * shown["bb_pct"]).round(1)
     shown[value_col] = shown[value_col].round(1)
     shown["talent_raa_600_park_adj"] = shown["talent_raa_600_park_adj"].round(1)
-    shown.columns = ["player", size_col, "K%", "BB%", "RAA (park-adj)", "talent RAA/600"]
+    shown["wpa"] = shown["wpa"].round(2)
+    shown["wpa_per_li"] = shown["wpa_per_li"].round(2)
+    shown.columns = [
+        "player",
+        size_col,
+        "K%",
+        "BB%",
+        "RAA (park-adj)",
+        "talent RAA/600",
+        "WPA",
+        "WPA/LI",
+    ]
     return shown.to_string(index=False)
 
 
@@ -308,7 +338,8 @@ def main(
         print(
             "\nRAA is raw production this season; talent RAA/600 is the same events with "
             "each rate shrunk toward league by a regression constant estimated from the "
-            "season's own spread of players, scaled to 600 PA."
+            "season's own spread of players, scaled to 600 PA. WPA is in wins; WPA/LI is "
+            "the same events at average leverage."
         )
 
     print("\n" + attribution_block(ATTRIBUTION_SOURCES))

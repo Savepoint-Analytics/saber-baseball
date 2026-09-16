@@ -40,7 +40,7 @@ def main() -> None:
     st.subheader("Roadmap")
     st.markdown(
         "- **Phase 1 (done):** compliant bronze ingestion, dbt marts, Prefect daily chain\n"
-        "- **Phase 2 (in progress):** RE24 per player, linear weights, season value marts; WPA next\n"
+        "- **Phase 2 (in progress):** RE24 and WPA per player, linear weights, season value marts\n"
         "- **Phase 3 (done, Elo still the bar):** nine outcome-model families backtested\n"
         "- **Phase 4 (done, calibration caveat):** PA engine, Monte-Carlo season → playoff/WS odds\n"
         "- **Phase 5 (next):** counterfactual player simulation"

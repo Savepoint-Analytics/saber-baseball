@@ -27,6 +27,8 @@ select
     on_3b,
     cast(bat_score as integer)                   as bat_score,
     cast(post_bat_score as integer)              as post_bat_score,
+    cast(home_score as integer)                  as home_score,
+    cast(away_score as integer)                  as away_score,
     stand,
     p_throws,
     events,

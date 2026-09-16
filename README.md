@@ -36,10 +36,11 @@ checkout ships:
   yet significant. Playoff odds are calibration-tested and carry their caveat.
 - `src/simulation/` — the plate-appearance engine (~7,100 games/sec), season
   projection to playoff/World Series odds, rating uncertainty propagated.
-- `src/features/` + the player marts — **RE24 per player-season**, season linear
-  weights, `gd_batter_season` / `gd_pitcher_season` with park-adjusted runs above
-  average, and `sv_players` (Chadwick + Lahman + Statcast). `make player-value`
-  prints leaders or a value card that shows raw production next to shrunk talent.
+- `src/features/` + the player marts — **RE24 and WPA per player-season**, season
+  linear weights, an analytically solved win-probability/leverage table,
+  `gd_batter_season` / `gd_pitcher_season` with park-adjusted runs above average,
+  and `sv_players` (Chadwick + Lahman + Statcast). `make player-value` prints
+  leaders or a value card that shows raw production next to shrunk talent.
 - `src/serving/daily_report.py` — today's win probabilities, projected scores and
   playoff odds, attribution-stamped (`make today`).
 - `src/compliance/attributions.py` — canonical attribution strings, auto-stamped onto
@@ -105,7 +106,7 @@ saber-baseball/
 │   ├── compliance/
 │   │   └── attributions.py       # canonical attributions, auto-stamped on exports
 │   ├── schemas/                  # Pandera schemas gating ingested tables
-│   ├── features/                 # RE24 mirror, player value cards (WPA not yet)
+│   ├── features/                 # RE24 + WPA mirrors, win-probability solver, value cards
 │   ├── models/                   # baselines, outcome models, backtests, playoff calibration
 │   ├── simulation/               # PA-level engine, season projection
 │   └── serving/                  # daily prediction report; Streamlit shell
@@ -184,9 +185,11 @@ make dbt-duckdb                          # bronze → silver → gold
    values (1B .47 … HR 1.39) without being told them; `gd_batter_season` and
    `gd_pitcher_season` carry rates, wOBA/xwOBA, context-included and context-neutral
    runs above average, and a PA-weighted park correction. `src/features/player_value.py`
-   joins the odds-ratio model's shrunk talent rates. **Not yet:** WPA / leverage (needs
-   a win-probability table the engine can generate), defence, baserunning, salary,
-   and any serving surface beyond the CLI.
+   joins the odds-ratio model's shrunk talent rates. Win probability and leverage
+   are **solved analytically** from the same components (`gd_win_probability`,
+   martingale-exact, calibrated to 0.011 against real games) and credited as WPA,
+   WPA/LI and mean leverage. **Not yet:** defence, baserunning, salary, and any
+   serving surface beyond the CLI.
 4. **Phase 3 — Prediction (baselines done, still trying to beat Elo):** nine model
    families backtested walk-forward (`make backtest`). Elo (0.6781) survives all of
    them; Elo + starter form (0.6769, 6/7 seasons) is promising but not significant.

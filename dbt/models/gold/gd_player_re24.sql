@@ -1,7 +1,7 @@
--- Gold: RE24 credited to each player per season, as a batter and as a pitcher.
--- The first context-included player value number in the project: it counts what
--- a player's plate appearances did to expected runs, in the situations he
--- actually faced. Phase 2's "how games are won" measure at the player level.
+-- Gold: RE24 and WPA credited to each player per season, as a batter and as a
+-- pitcher. The context-included player value numbers: what a player's plate
+-- appearances did to expected runs, and to his team's chance of winning, in the
+-- situations he actually faced. Phase 2's "how games are won" at player level.
 --
 -- Grain: (season, season_phase, role, player_id). A two-way player (Ohtani) has
 -- one row per role.
@@ -17,10 +17,17 @@
 -- postseason PAs and walk-offs are valued but were not in the matrix's fit).
 -- It is *not* park- or opponent-adjusted; gd_batter_season and
 -- gd_pitcher_season carry the park-adjusted versions.
+--
+-- **wpa** is in wins (a season of +5 is a star). **wpa_per_li** divides each
+-- PA's WPA by its leverage before summing -- Tango's "context-neutral wins",
+-- what the same events were worth at average leverage -- so wpa - wpa_per_li
+-- is the part of a player's WPA that came from *when* he produced.
+-- **mean_leverage** says how high-leverage his plate appearances were on
+-- average (1.0 is league); a closer's runs to ~1.8, a mop-up man's well below 1.
 {{ config(materialized='table') }}
 
 with pa as (
-    select season, season_phase, batter, pitcher, runs_on_play, re24
+    select season, season_phase, batter, pitcher, runs_on_play, re24, wpa, leverage
     from {{ ref('gd_pa_run_value') }}
 ),
 
@@ -32,7 +39,10 @@ batting as (
         batter                       as player_id,
         count(*)                     as pa,
         sum(runs_on_play)            as runs_on_play,
-        sum(re24)                    as re24
+        sum(re24)                    as re24,
+        sum(wpa)                     as wpa,
+        sum(wpa / nullif(leverage, 0)) as wpa_per_li,
+        avg(leverage)                as mean_leverage
     from pa
     group by 1, 2, 3, 4
 ),
@@ -45,7 +55,10 @@ pitching as (
         pitcher                      as player_id,
         count(*)                     as pa,
         sum(runs_on_play)            as runs_on_play,
-        -sum(re24)                   as re24
+        -sum(re24)                   as re24,
+        -sum(wpa)                    as wpa,
+        -sum(wpa / nullif(leverage, 0)) as wpa_per_li,
+        avg(leverage)                as mean_leverage
     from pa
     group by 1, 2, 3, 4
 )

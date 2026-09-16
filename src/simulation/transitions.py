@@ -51,8 +51,13 @@ class TransitionMatrix:
     probs: np.ndarray
 
     @classmethod
-    def load(cls, era: str = "2023-2026") -> TransitionMatrix:
-        con = _lake()
+    def load(
+        cls, era: str = "2023-2026", con: duckdb.DuckDBPyConnection | None = None
+    ) -> TransitionMatrix:
+        """Load one era's matrix; pass ``con`` to reuse an open connection (a dbt
+        Python model cannot open a second handle on the lake it is writing)."""
+        own = con is None
+        con = con or _lake()
         try:
             df = con.sql(
                 f"""
@@ -62,7 +67,8 @@ class TransitionMatrix:
                 """
             ).df()
         finally:
-            con.close()
+            if own:
+                con.close()
         if df.empty:
             raise ValueError(f"No transitions for era {era!r}")
 

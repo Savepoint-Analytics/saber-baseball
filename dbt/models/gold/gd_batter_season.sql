@@ -14,6 +14,9 @@
 --     it does not persist year to year (r ~ +0.04), which is why both are shown.
 --   * **woba / xwoba** -- Savant's rate stats, on the OBP scale. Carried because
 --     they are what a baseball reader expects to see next to the run values.
+--   * **wpa / wpa_per_li / mean_leverage** -- wins rather than runs: what his
+--     PAs did to his team's win probability, the same at average leverage, and
+--     how high-leverage his PAs were. See gd_player_re24.
 --
 -- **Park adjustment** uses the standard wRC+ correction: a league-average hitter
 -- in a park with factor PF produces (PF - 1) * league runs-per-PA extra runs per
@@ -89,6 +92,9 @@ agg as (
         avg(xwoba) filter (where woba_denom > 0)          as xwoba,
         sum(re24)                                         as re24,
         sum(lw_value)                                     as lw_raa,
+        sum(wpa)                                          as wpa,
+        sum(wpa / nullif(leverage, 0))                    as wpa_per_li,
+        avg(leverage)                                     as mean_leverage,
         avg(pa_park_factor)                               as park_factor
     from per_pa
     group by 1, 2, 3
@@ -117,6 +123,9 @@ select
     a.runs_on_play,
     a.re24,
     a.lw_raa,
+    a.wpa,
+    a.wpa_per_li,
+    a.mean_leverage,
     a.park_factor,
     l.lg_runs_per_pa,
     a.re24   - (a.park_factor - 1.0) * l.lg_runs_per_pa * a.pa as re24_park_adj,
