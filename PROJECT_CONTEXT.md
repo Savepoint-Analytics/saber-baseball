@@ -2,7 +2,7 @@
 
 > **Vertical:** Sports → Baseball (MLB Sabermetrics)
 > **Inherits:** `../../COMPANY_CONTEXT.md`
-> **Last updated:** 2026-08-31
+> **Last updated:** 2026-09-15
 
 ---
 
@@ -68,22 +68,46 @@ Build the data foundation once; layer (1) → (4) on top of it.
 
 ## 6. Current phase
 
-**Phase 1 — Ingestion (in progress, as of 2026-06-28).** Phase 0 (foundations /
-scaffolding) is complete: context files, dependency & data-source registries, storage
-architecture, and the project skeleton all exist in the `saber-baseball` repo. The
-repo now ships working, compliant bronze-layer pullers for Statcast, Retrosheet,
-Lahman, Chadwick, and the MLB Stats API (shared rate-limit + cache + backoff;
-auto-stamped attributions; Pandera schema gates). Prefect now chains ingestion → dbt → Postgres
-end to end, and **Phase 3 baselines are implemented and backtested**
-(`src/models/baselines.py`, `src/models/backtest.py`): Elo sets the bar at 0.6788
-log-loss over 2017-2026. Features and simulation remain documented stubs. Next:
-Statcast-derived features and a model that beats Elo.
+**Phases 1, 3 and 4 complete; Phase 2 in progress (as of 2026-09-15).** The build
+order departed from §3's priority order deliberately: the data foundation and the
+prediction/simulation stack were finished first because player evaluation needed
+the plate-appearance layer they produced.
+
+- **Phase 1 — Ingestion: done.** Compliant bronze pullers for Statcast, Retrosheet,
+  Lahman, Chadwick, the Stats API and the team dimension (shared throttle + cache +
+  backoff; auto-stamped attributions; Pandera gates). 8.2M pitches over 2015-2026 in
+  MinIO; dbt silver/gold in DuckDB (168 tests); curated marts published to the
+  `baseball` schema in Postgres; Prefect chains ingest → dbt → publish daily.
+- **Phase 3 — Prediction: baselines and nine model families backtested.** Elo
+  (0.6781 log-loss walk-forward) is still the bar; Elo + starting-pitcher form
+  (0.6769, wins 6 of 7 seasons) is the only feature set that has moved it, and it
+  is not yet significant (t = 1.60). Bullpen, park/weather and batter × pitch-family
+  features were measured and make prediction worse. `make today` publishes the slate.
+- **Phase 4 — Season simulation: done, with a documented caveat.** The
+  plate-appearance engine reproduces run scoring, home-field advantage and 1-run
+  frequency but is ~6% under-dispersed after six measured mechanisms. Playoff odds
+  are backtested from 1 September 2023-25: locks and also-rans are calibrated, the
+  75-95% band is overconfident (p = 0.013 against a null that respects twelve
+  qualifiers per league), and the report carries that note.
+- **Phase 2 — Player & team analysis: started 2026-09-15.** `sv_players` (Chadwick ∪
+  Statcast ids, Lahman bio), per-season RE24 credited to every batter and pitcher,
+  season linear weights (they reproduce the textbook values), and
+  `gd_batter_season` / `gd_pitcher_season` with park-adjusted runs above average;
+  `src/features/player_value.py` joins the odds-ratio model's shrunk talent rates
+  into a value card. Not yet built: WPA and leverage (needs a win-probability table
+  the engine can generate), defence, baserunning, salary, any serving surface
+  beyond the CLI.
+
+**Next:** WPA/leverage from the engine; then Phase 5 counterfactuals on the shrunk
+player rates the value card already exposes.
 
 ## 7. Modeling approach (intended)
 
 - **Baselines first:** home-field prior, Elo, Pythagorean expectation, log5.
-- **Run expectancy / win probability:** build RE24 and WPA tables from Retrosheet
-  event data; these are both features and explanatory tools ("how games are won").
+- **Run expectancy / win probability:** RE24 is built per season from Statcast
+  plate appearances (which carry the full base-out state for 2015+, so Retrosheet is
+  not needed there); WPA still to come. Both features and explanatory tools ("how
+  games are won").
 - **Outcome models:** logistic regression → gradient boosting (XGBoost/LightGBM) on
   team-strength + pitching matchup + park + rest features.
 - **Bayesian player rates:** partial pooling (PyMC/bambi) for stable skill estimates

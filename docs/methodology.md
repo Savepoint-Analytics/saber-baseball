@@ -69,9 +69,9 @@ Coverage as of 2026-08-31: 8,184,213 pitches over 27,752 games, 2015-2026, and
    Pythagorean, log5 (`src/models/baselines.py`) — then logistic → gradient boosting
    (XGBoost/LightGBM) on team-strength + pitching matchup + park + rest features.
    Judged on **log-loss** and **calibration** (reliability curve) on held-out seasons.
-2. **Player & team analysis.** Context-adjusted value via RE24 / WPA from Retrosheet
-   events (`src/features/run_expectancy.py`) — both features and "how games are won"
-   explanation.
+2. **Player & team analysis.** Context-adjusted value via RE24 (built per season from
+   Statcast PAs, `gd_pa_run_value` → `gd_player_re24`) and, still to come, WPA — both
+   features and "how games are won" explanation. See "Phase 2: player evaluation".
 3. **Season/playoff projection.** Monte-Carlo the remaining schedule → playoff → World
    Series odds (`src/simulation/game_engine.py`), calibrated vs. history.
 4. **Counterfactual simulation.** Bayesian partial-pooled player rates (PyMC/bambi);
@@ -817,6 +817,116 @@ in September, standings dominate and there is little left for rating uncertainty
 do. The Platt-style recalibration of the logit remains available and remains
 unattractive: it would repair the headline number without touching the win-total
 tails the misses actually landed in.
+
+## Phase 2: player evaluation (2026-09-15)
+
+The first player-level deliverable: RE24 credited to every batter and pitcher,
+season linear weights, and batter/pitcher-season marts with a park correction,
+joined to a player dimension and to the odds-ratio model's shrunk rates.
+`make player-value` prints leaders or a card; `dbt/models/gold/gd_*_season.sql`
+and `src/features/player_value.py` are the code paths.
+
+### The player dimension
+
+`sv_players` keys on the MLBAM id every fact table already uses. The Chadwick
+register is the crosswalk (Retrosheet, Baseball-Reference, FanGraphs ids, names);
+Lahman People/Fielding add birth date, bats/throws and a career primary position.
+Two lags had to be designed around rather than assumed away:
+
+- **Chadwick trails a debut by days to weeks.** 54 of the 2026 call-ups were in the
+  Statcast lake before they were in the register, so the dimension's spine is
+  Chadwick ∪ every id observed in `sv_plate_appearances`, and a player the register
+  has not listed yet is carried by id with `in_chadwick = false`. Dropping him would
+  orphan his rows in every mart.
+- **Lahman trails a full season**, so bats/throws are derived from the player's own
+  Statcast PAs as the fallback. A switch hitter is the only player who ever appears
+  from both sides, so ≥ 5% of PAs from each side reads as 'B'. Where Lahman and the
+  derivation can both speak, they agree on 99%+ of players (a dbt test).
+
+Lahman's Fielding table has no DH, so a full-time DH is labelled by whatever he
+last fielded — Ohtani reads "P". Known, noted on the model, not corrected.
+
+### RE24 per season, not per era
+
+`gd_run_expectancy` is bucketed by era because the simulator wants a stable matrix.
+Player value wants the opposite trade. Measured against the era matrix, the entire
+2015 league summed to **−1,407 RE24**: 2015 scored 4.25 runs a game inside an era
+that averaged more, and "runs above average" was silently "runs above 2015-2018".
+`gd_run_expectancy_season` fits the same matrix per season; the per-season league
+total is then near zero and "above average" means what it says. The cost is sample
+size in the rarest state (runner on third, none out: ~400 PAs a season, SE ≈ 0.06
+runs; 143 PAs in the 60-game 2020).
+
+`gd_pa_run_value` credits every PA with `RE(after) − RE(before) + runs`, and
+`gd_player_re24` sums it per season × role × player, sign-flipped for pitchers so
+positive is good in both roles; the two roles cancel exactly within a season, which
+is tested. `src/features/run_expectancy.py` is the pandas mirror, and a test
+asserts it matches the SQL to 1e-9 on the 2025 matrix and on a full game's credit.
+
+### Linear weights: measured, and they land on the textbook
+
+Season linear weights are the mean RE24 per outcome over complete half-innings.
+Nothing is assumed about them, and they reproduce the published values:
+
+| | 1B | 2B | 3B | HR | BB | HBP | K | OUT | ROE |
+|---|---|---|---|---|---|---|---|---|---|
+| 2017 | .456 | .790 | 1.075 | 1.382 | .312 | .339 | −.277 | −.279 | .452 |
+| 2025 | .472 | .763 | 1.003 | 1.387 | .333 | .356 | −.273 | −.266 | .439 |
+
+The ordering HR > 3B > 2B > 1B > BB and K, OUT < 0 is a dbt test for every season.
+
+**They are not exactly centred, and the residual is understood.** The PA-weighted
+mean should be zero by construction (RE24 telescopes across a complete half-inning
+to runs − RE(start), and RE is that expectation). It is −0.0003 to −0.0014 runs
+per PA, for two measured reasons (2025):
+
+- RE(bases empty, none out) pools true leadoff PAs (0.502 runs to end of inning)
+  with PAs after a leadoff home run (**0.571**) — innings hang together, the matrix
+  is Markov. About −0.003 runs per half-inning.
+- A bottom half from the ninth on is only "complete" if the home side failed to
+  score, so the ghost-runner starts in extras are selected low (0.85 runs against
+  RE 1.14). About −110 runs a season.
+
+Telescoping itself was verified exact (error 1e-17). The residual is under a run
+per 600 PA and the same constant for every player, so the weights are left as
+measured rather than re-centred, and the test threshold is set just above it.
+
+### The season marts and the park correction
+
+`gd_batter_season` / `gd_pitcher_season` carry counts, K%/BB%, on-base (including
+ROE, the engine's definition), wOBA and xwOBA from Savant, RE24, linear-weights
+runs above average (`lw_raa`), and a park correction. The correction is the
+standard wRC+ one — a league-average hitter in a park with factor PF produces
+(PF − 1) × league runs-per-PA extra runs per PA through no skill of his own — applied
+to both run values but **not** to wOBA, which is not in runs and would need a scale
+constant this project has not measured. The factor is PA-weighted over the venues
+the player actually batted in, so road PAs are not adjusted as if at home. Venues
+with no factor (the first two seasons, before a three-season window exists) are
+neutral.
+
+### Raw next to shrunk
+
+`player_value.py` joins the odds-ratio model's empirical-Bayes rates
+(`src/simulation/pa_model.py`, already validated for the simulator) so a card
+shows what a player did next to what he is probably like, with the regression
+constants that produced it — 2025: K 47 PA, BB 108, HR 193 for batters. The shrunk
+rates are also priced at the season's linear weights per 600 PA (`talent_raa_600`),
+a sample-size-aware context-neutral number. Judge's 2025: **+88.5** raw
+park-adjusted RAA, **+65.0** talent RAA/600 — the gap is the shrinkage, mostly on
+home runs, and it is the honest estimate. A ≤ 10-PA player sits within two points
+of league on-base on the talent line while his raw line runs from 0% to 100%.
+
+The 2024 and 2025 leaderboards (Judge, Ohtani, Soto, Witt; Skubal, Yamamoto,
+Skenes) are what a reader would expect, which is the cheapest validation there is
+and a test pins the top of it.
+
+### Not yet built
+
+WPA and leverage (a win-probability table keyed on inning × score × base-out × half,
+which the engine can generate from any state); defence and baserunning attributed
+to players (team defence is measured, r = +0.52 to +0.64 year over year, and
+unattributed); salary (Lahman's Salaries table ends in 2016 — a new source and a
+`public-data-sources.md` entry first); any serving surface beyond the CLI.
 
 ## Evaluation
 
