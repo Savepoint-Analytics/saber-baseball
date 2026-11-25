@@ -13,7 +13,6 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.config import settings
 from src.models.backtest_season import (
     OUTCOMES,
     calibration_slope,
@@ -23,9 +22,9 @@ from src.models.backtest_season import (
     slope_null_distribution,
 )
 from src.simulation.season import load_season_state, load_training_games
+from tests.conftest import requires_lake
 
-LAKE = (settings.data_dir / "saber.duckdb").resolve()
-needs_lake = pytest.mark.skipif(not LAKE.exists(), reason="DuckDB lake not built")
+needs_lake = requires_lake()
 
 
 def _season(results: list[tuple[int, int, int]], post: list[tuple[str, int, int, int]]):

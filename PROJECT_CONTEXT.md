@@ -94,20 +94,28 @@ the plate-appearance layer they produced.
   season linear weights (they reproduce the textbook values), and
   `gd_batter_season` / `gd_pitcher_season` with park-adjusted runs above average;
   `src/features/player_value.py` joins the odds-ratio model's shrunk talent rates
-  into a value card. Not yet built: WPA and leverage (needs a win-probability table
-  the engine can generate), defence, baserunning, salary, any serving surface
-  beyond the CLI.
+  into a value card. Win probability and leverage are solved analytically from the
+  engine's components (`gd_win_probability`; martingale-exact, 0.011 calibration
+  gap against real games) and credited as WPA / WPA-per-LI / mean leverage. Not
+  yet built: defence, baserunning, salary, any serving surface beyond the CLI.
 
-**Next:** WPA/leverage from the engine; then Phase 5 counterfactuals on the shrunk
-player rates the value card already exposes.
+- **Phase 5 — Counterfactuals: first cut, 2026-09-15.** `src/simulation/counterfactual.py`
+  perturbs one player's rate vector and re-runs his real games paired on common
+  random numbers (arms correlate +0.95; standard error ~5x smaller than independent
+  runs). Reports an analytic linear-weights delta and a simulated one in runs and
+  wins. Ohtani, three points of K → 1B: +0.081 runs/game, +1.18 ± 0.50 wins over
+  his 158 games.
+
+**Next:** package the counterfactual and value-card outputs as products (a serving
+surface beyond the CLI); then defence, baserunning and salary.
 
 ## 7. Modeling approach (intended)
 
 - **Baselines first:** home-field prior, Elo, Pythagorean expectation, log5.
 - **Run expectancy / win probability:** RE24 is built per season from Statcast
   plate appearances (which carry the full base-out state for 2015+, so Retrosheet is
-  not needed there); WPA still to come. Both features and explanatory tools ("how
-  games are won").
+  not needed there); the win-probability table is solved analytically from the
+  same transition matrix. Both features and explanatory tools ("how games are won").
 - **Outcome models:** logistic regression → gradient boosting (XGBoost/LightGBM) on
   team-strength + pitching matchup + park + rest features.
 - **Bayesian player rates:** partial pooling (PyMC/bambi) for stable skill estimates

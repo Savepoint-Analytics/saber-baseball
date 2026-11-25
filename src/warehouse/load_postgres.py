@@ -78,6 +78,7 @@ PUBLISHED: dict[str, tuple[str, ...]] = {
         "gd_team_season_record",
         "gd_run_expectancy",
         "gd_run_expectancy_season",
+        "gd_win_probability",
         "gd_linear_weights",
         "gd_player_re24",
         "gd_batter_season",

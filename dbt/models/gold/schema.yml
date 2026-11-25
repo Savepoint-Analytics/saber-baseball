@@ -308,6 +308,43 @@ models:
         tests: [not_null]
       - name: re_after
         tests: [not_null]
+      - name: wpa
+        description: "Change in the batting team's win probability across the PA. A walk-off grand slam from far behind is the ceiling."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: -1, max_value: 1, inclusive: true}
+      - name: leverage
+        tests: [not_null]
+
+  - name: gd_win_probability
+    description: >
+      Home win probability and leverage index for every (season, inning, half,
+      score difference, base-out state), solved analytically from the odds-ratio
+      model's league/state/side rates and gd_base_transitions (a dbt Python model
+      over src.features.win_probability). Inning 10 is any extra inning; state 24
+      is "half-inning over"; score_diff is home minus away, clamped to +-20.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, inning, half, score_diff, state]
+    columns:
+      - name: win_prob
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 1, inclusive: true}
+      - name: leverage
+        description: "Expected |dWP| over the next PA, scaled so the season's average PA is 1.0. Null for state 24."
+        tests:
+          - not_null:
+              config: {where: "state < 24"}
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 12, inclusive: true}
+      - name: half
+        tests:
+          - accepted_values:
+              arguments: {values: ["Top", "Bot"]}
 
   - name: gd_player_re24
     description: >
@@ -330,6 +367,13 @@ models:
               arguments: {min_value: 1, max_value: 1100, inclusive: true}
       - name: re24
         tests: [not_null]
+      - name: wpa
+        tests: [not_null]
+      - name: mean_leverage
+        description: "Mean leverage index of the player's PAs. A one-PA pinch hitter in a walk-off spot can reach ~11."
+        tests:
+          - dbt_utils.accepted_range:
+              arguments: {min_value: 0, max_value: 12, inclusive: true}
 
   - name: gd_linear_weights
     description: >

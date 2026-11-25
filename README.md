@@ -36,10 +36,11 @@ checkout ships:
   yet significant. Playoff odds are calibration-tested and carry their caveat.
 - `src/simulation/` — the plate-appearance engine (~7,100 games/sec), season
   projection to playoff/World Series odds, rating uncertainty propagated.
-- `src/features/` + the player marts — **RE24 per player-season**, season linear
-  weights, `gd_batter_season` / `gd_pitcher_season` with park-adjusted runs above
-  average, and `sv_players` (Chadwick + Lahman + Statcast). `make player-value`
-  prints leaders or a value card that shows raw production next to shrunk talent.
+- `src/features/` + the player marts — **RE24 and WPA per player-season**, season
+  linear weights, an analytically solved win-probability/leverage table,
+  `gd_batter_season` / `gd_pitcher_season` with park-adjusted runs above average,
+  and `sv_players` (Chadwick + Lahman + Statcast). `make player-value` prints
+  leaders or a value card that shows raw production next to shrunk talent.
 - `src/serving/daily_report.py` — today's win probabilities, projected scores and
   playoff odds, attribution-stamped (`make today`).
 - `src/compliance/attributions.py` — canonical attribution strings, auto-stamped onto
@@ -105,9 +106,9 @@ saber-baseball/
 │   ├── compliance/
 │   │   └── attributions.py       # canonical attributions, auto-stamped on exports
 │   ├── schemas/                  # Pandera schemas gating ingested tables
-│   ├── features/                 # RE24 mirror, player value cards (WPA not yet)
+│   ├── features/                 # RE24 + WPA mirrors, win-probability solver, value cards
 │   ├── models/                   # baselines, outcome models, backtests, playoff calibration
-│   ├── simulation/               # PA-level engine, season projection
+│   ├── simulation/               # PA-level engine, season projection, counterfactuals
 │   └── serving/                  # daily prediction report; Streamlit shell
 │
 ├── dbt/                          # dbt project (bronze → silver → gold)
@@ -139,6 +140,7 @@ make test
 # 5. Use it
 make today                      # today's win probabilities + playoff odds
 make player-value SEASON=2025   # batter / pitcher leaders; PLAYER=660271 for a card
+make counterfactual SEASON=2025 PLAYER=660271   # improvement levers, then simulate one
 make backtest                   # walk-forward backtest of the outcome models
 ```
 
@@ -184,9 +186,11 @@ make dbt-duckdb                          # bronze → silver → gold
    values (1B .47 … HR 1.39) without being told them; `gd_batter_season` and
    `gd_pitcher_season` carry rates, wOBA/xwOBA, context-included and context-neutral
    runs above average, and a PA-weighted park correction. `src/features/player_value.py`
-   joins the odds-ratio model's shrunk talent rates. **Not yet:** WPA / leverage (needs
-   a win-probability table the engine can generate), defence, baserunning, salary,
-   and any serving surface beyond the CLI.
+   joins the odds-ratio model's shrunk talent rates. Win probability and leverage
+   are **solved analytically** from the same components (`gd_win_probability`,
+   martingale-exact, calibrated to 0.011 against real games) and credited as WPA,
+   WPA/LI and mean leverage. **Not yet:** defence, baserunning, salary, and any
+   serving surface beyond the CLI.
 4. **Phase 3 — Prediction (baselines done, still trying to beat Elo):** nine model
    families backtested walk-forward (`make backtest`). Elo (0.6781) survives all of
    them; Elo + starter form (0.6769, 6/7 seasons) is promising but not significant.
@@ -199,8 +203,13 @@ make dbt-duckdb                          # bronze → silver → gold
    playoff and World Series odds; `make season-backtest` scores them from 1 September
    2023–25 — locks and also-rans are well calibrated, the 75–95% band is overconfident,
    and the report says so. Plain-language write-ups in [`docs/explainers/`](docs/explainers/).
-6. **Phase 5 — Counterfactuals (next):** perturb a player's shrunk rate inputs,
-   re-simulate, surface improvement levers; package as affordable analysis products.
+6. **Phase 5 — Counterfactuals (first cut done):** `make counterfactual` perturbs a
+   player's shrunk rate inputs and re-runs his real games, paired on common random
+   numbers (arms correlate +0.95, so the standard error is ~5x smaller than
+   independent runs). Reports an instant linear-weights answer and a simulated one
+   in runs and wins. The lever table makes the key point plain: a point of
+   strikeouts converted to *outs* is worth +0.04 runs/600, converted to *singles*
+   +4.5. **Next:** package as affordable analysis products.
 
 ## Data & licensing — the short version
 

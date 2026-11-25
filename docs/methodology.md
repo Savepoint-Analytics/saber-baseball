@@ -69,9 +69,9 @@ Coverage as of 2026-08-31: 8,184,213 pitches over 27,752 games, 2015-2026, and
    Pythagorean, log5 (`src/models/baselines.py`) — then logistic → gradient boosting
    (XGBoost/LightGBM) on team-strength + pitching matchup + park + rest features.
    Judged on **log-loss** and **calibration** (reliability curve) on held-out seasons.
-2. **Player & team analysis.** Context-adjusted value via RE24 (built per season from
-   Statcast PAs, `gd_pa_run_value` → `gd_player_re24`) and, still to come, WPA — both
-   features and "how games are won" explanation. See "Phase 2: player evaluation".
+2. **Player & team analysis.** Context-adjusted value via RE24 and WPA (built per
+   season from Statcast PAs, `gd_pa_run_value` → `gd_player_re24`) — both features
+   and "how games are won" explanation. See "Phase 2: player evaluation".
 3. **Season/playoff projection.** Monte-Carlo the remaining schedule → playoff → World
    Series odds (`src/simulation/game_engine.py`), calibrated vs. history.
 4. **Counterfactual simulation.** Bayesian partial-pooled player rates (PyMC/bambi);
@@ -826,6 +826,8 @@ joined to a player dimension and to the odds-ratio model's shrunk rates.
 `make player-value` prints leaders or a card; `dbt/models/gold/gd_*_season.sql`
 and `src/features/player_value.py` are the code paths.
 
+Companion: "Win probability and leverage" below adds WPA to the same marts.
+
 ### The player dimension
 
 `sv_players` keys on the MLBAM id every fact table already uses. The Chadwick
@@ -920,13 +922,132 @@ The 2024 and 2025 leaderboards (Judge, Ohtani, Soto, Witt; Skubal, Yamamoto,
 Skenes) are what a reader would expect, which is the cheapest validation there is
 and a test pins the top of it.
 
+### Win probability and leverage: solved, not simulated (2026-09-15)
+
+WPA needs `P(home wins | inning, half, score difference, base-out state)` for every
+situation. `src/features/win_probability.py` **solves** it rather than sampling it:
+the transition matrix gives the exact distribution of runs over the rest of any
+half-inning (a 24×24 linear system per run count), and backward induction over
+half-innings gives win probability with the rules applied explicitly — no bottom
+half when the home side leads after the top of the ninth, a walk-off the instant
+the home side leads, and tied extra innings as a fixed point since every extra
+inning looks the same. It uses the same components as RE24 — the odds-ratio
+model's league, state and home/away terms, and `gd_base_transitions` — so the
+two disagree only where context matters. One table per season, 20,500 rows,
+0.2 seconds; a dbt Python model (`gd_win_probability`) keeps it inside the DAG.
+
+**Exactness is tested, and so is truth.** The martingale property — averaged over
+what the next PA can do, WP must not move — holds to 3 × 10⁻¹⁵. And the numbers
+land on the literature without being told it:
+
+| Situation | Ours (2025) | Published |
+|---|---|---|
+| Mean E\|ΔWP\| per PA (leverage scale) | **0.0343** | ~0.0346 (Tango) |
+| Bottom 9th, tied, bases empty, none out | 0.643 | ~0.63–0.65 |
+| Bottom 9th, down 1, bases loaded, none out | 0.732 | ~0.72 |
+| Leverage: leadoff PA of the game | 0.86 | 0.87 |
+| Leverage: bottom 9th, tied, loaded, none out | 2.45 | ~2.4–2.6 |
+| Highest single-PA leverage in the data | 11.2 | ~10–11 |
+
+**Calibration against real games.** Binning every regular-season PA by stated home
+WP, the observed home win rate tracks it with a PA-weighted mean gap of **0.011**.
+The residual is systematic and expected: the 0.1–0.3 bins run about 2 points
+*more* extreme than stated, as do 0.7–0.8. The table is team-agnostic, and a side
+that is leading is on average the better side, so leads hold slightly more often
+than league-average arithmetic says. That is the standard WPA convention (a
+team-adjusted WPA would credit a Dodgers rally less than a Rockies one) and is
+left as measured.
+
+**Two things the data forced.** First, "after" is the next plate appearance as
+*observed* — its inning, half, score and base-out state — not the situation the
+rules say should follow. Postseason extra innings start with the bases empty
+while the season's table assumes a ghost runner; a handful of half-innings open
+with a runner on third; 2020–21 doubleheaders were seven innings (detected from
+play, and looked up two innings later than they read). Reading the real next PA
+makes WPA telescope exactly across every game — `assert_wpa_telescopes_to_the_result`
+holds Σ WPA = final − opening WP to 10⁻⁹ for all 27,000 games. Second, ~10 runs
+a season score *between* plate appearances (a balk, a pickoff throw into the
+stands) and Statcast only shows them on the next pitch. `runs_on_play` now reads
+to the next PA's first pitch, which took the 2025 game reconciliation from
+2,420/2,430 to **2,429/2,430** and closed the score discontinuity that would
+otherwise break WPA.
+
+**What it says about players.** `gd_player_re24`, `gd_batter_season` and
+`gd_pitcher_season` now carry `wpa`, `wpa_per_li` (each PA's WPA divided by its
+leverage before summing — Tango's context-neutral wins) and `mean_leverage`. The
+leaderboards show the classic pattern the literature predicts: closers (Hader,
+Muñoz, Chapman at mean LI 2.0–2.7) rise into the top ten by WPA on 200–250
+batters faced, and WPA/LI puts the starters back ahead. Judge 2025: +5.59 WPA,
++7.66 WPA/LI — the difference is timing, and timing does not persist.
+
+## Phase 5: counterfactual player simulation (2026-09-15)
+
+"If this hitter turned strikeouts into singles, what is it worth to his team?"
+`src/simulation/counterfactual.py` perturbs one player's row in the odds-ratio
+model and re-runs the games he actually played, in his own lineup, his own parks,
+against the starters he actually faced. `make counterfactual` is the entry point.
+
+**The destination is the whole question, so it is explicit.** A `Perturbation`
+names where the moved probability goes — a named outcome, or spread proportionally
+— because the same "cut strikeouts by a point" is worth almost nothing or a great
+deal depending on it. Ohtani's 2025 levers, at that season's linear weights per
+600 PA:
+
+| lever | runs/600 |
+|---|---|
+| power: OUT → HR | +9.92 |
+| contact: K → 1B | +4.47 |
+| hard contact: OUT → 1B | +4.43 |
+| discipline: OUT → BB | +3.59 |
+| contact: K → balls in play (proportional) | +2.80 |
+| **contact: K → OUT** | **+0.04** |
+
+The last row is the point. A strikeout and a batted-ball out are worth the same
+(−.27 vs −.27), so "make more contact" is worth nothing unless the contact is
+good contact — a result the analytic layer gives instantly and for free.
+
+For a **pitcher** each lever is reversed rather than negated (he gives up one
+fewer home run instead of hitting one more), which is worth exactly what the
+batter's version is worth and keeps every row of his table something he would
+want to do. Skubal's 2025 table is headed by HR → OUT at +9.92 and 1B → K at
++4.47.
+
+**Two layers, both reported.** The analytic delta is context-neutral and exact.
+The simulated one runs the engine over the player's real games and answers in
+wins. For Ohtani, three points of strikeouts becoming singles (+13.4 runs/600
+analytically) over his 158 games:
+
+| | baseline | counterfactual | delta |
+|---|---|---|---|
+| runs scored/game | 5.025 | 5.106 | **+0.081 ± 0.020** |
+| runs allowed/game | 4.270 | 4.286 | +0.016 ± 0.016 |
+| win probability | 0.573 | 0.581 | **+0.0074 ± 0.0032** |
+| wins over those games | | | **+1.18 ± 0.50** |
+
+The simulated +12.8 runs over 158 games sits right on the analytic +13.4 per 600
+PA, which is the check that the engine and the weights agree. What simulation adds
+is the conversion to *wins in this context* — diminishing returns in a good lineup,
+the run environment of his parks, and the shape of the score distribution.
+
+**Common random numbers, and they were verified rather than assumed.** Both arms
+run from the same per-game seed. They diverge — one different outcome draw and the
+streams separate — so the pairing is imperfect, but measured on 2025 the arms
+correlate **+0.95** and the standard error of the difference is **4.7× smaller**
+than two independent runs. That is what makes a 20-game test meaningful and a
+158-game answer precise to ±0.5 wins. A test asserts the correlation rather than
+trusting the technique.
+
+**What it is not.** The perturbed rate is treated as new true talent, not a hot
+streak; no other player changes; the manager's policies are the measured ones,
+unchanged. The answer is "what this would have been worth, in this team, this
+season" — not a claim that the improvement is achievable.
+
 ### Not yet built
 
-WPA and leverage (a win-probability table keyed on inning × score × base-out × half,
-which the engine can generate from any state); defence and baserunning attributed
-to players (team defence is measured, r = +0.52 to +0.64 year over year, and
-unattributed); salary (Lahman's Salaries table ends in 2016 — a new source and a
-`public-data-sources.md` entry first); any serving surface beyond the CLI.
+Defence and baserunning attributed to players (team defence is measured, r = +0.52
+to +0.64 year over year, and unattributed); salary (Lahman's Salaries table ends
+in 2016 — a new source and a `public-data-sources.md` entry first); any serving
+surface beyond the CLI.
 
 ## Evaluation
 

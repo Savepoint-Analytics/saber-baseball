@@ -13,6 +13,8 @@
 --
 -- Starts come from sv_statcast_pitcher_game, where the starter is whoever threw
 -- his side's first plate appearance of the game. Games is every appearance.
+-- wpa / wpa_per_li / mean_leverage are in wins, sign-flipped like the runs;
+-- mean_leverage is what separates a closer from a mop-up man at equal quality.
 {{ config(materialized='table') }}
 
 with pa as (
@@ -76,6 +78,9 @@ agg as (
         avg(xwoba) filter (where woba_denom > 0)          as xwoba_allowed,
         -sum(re24)                                        as re24_saved,
         -sum(lw_value)                                    as lw_raa_saved,
+        -sum(wpa)                                         as wpa,
+        -sum(wpa / nullif(leverage, 0))                   as wpa_per_li,
+        avg(leverage)                                     as mean_leverage,
         avg(pa_park_factor)                               as park_factor
     from per_pa
     group by 1, 2, 3
@@ -105,6 +110,9 @@ select
     a.runs_allowed,
     a.re24_saved,
     a.lw_raa_saved,
+    a.wpa,
+    a.wpa_per_li,
+    a.mean_leverage,
     a.park_factor,
     l.lg_runs_per_pa,
     a.re24_saved   + (a.park_factor - 1.0) * l.lg_runs_per_pa * a.bf as re24_saved_park_adj,
